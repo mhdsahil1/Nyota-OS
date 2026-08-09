@@ -1,0 +1,47 @@
+# =========================
+# Build artifacts
+# =========================
+
+*.o
+*.obj
+*.bin
+*.elf
+*.map
+*.lst
+
+# Disk / emulator images
+*.img
+*.iso
+
+# =========================
+# Build directories
+# =========================
+
+build/
+dist/
+out/
+
+# =========================
+# Debug / temporary files
+# =========================
+
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+
+# =========================
+# Editor / IDE
+# =========================
+
+.vscode/
+.idea/
+
+# =========================
+# OS-generated files
+# =========================
+
+.DS_Store
+Thumbs.db
+desktop.ini
