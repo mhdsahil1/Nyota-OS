@@ -5,711 +5,400 @@
 <h1 align="center">Nyota OS</h1>
 
 <p align="center">
-  <strong>A hobby operating system built from scratch.</strong>
+  <strong>A hobby operating system built from scratch for the x86_64 architecture.</strong>
 </p>
 
 <p align="center">
-  Exploring boot processes, low-level programming, kernel development,
+  Exploring boot processes, low-level architecture, 64-bit long mode, kernel development,
   and operating system fundamentals.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Language-C-00599C?style=for-the-badge&logo=c&logoColor=white">
-  <img src="https://img.shields.io/badge/Assembly-x86-525252?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Assembler-NASM-111111?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-1%3A%20Kernel%20Foundation-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
+  <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
   <img src="https://img.shields.io/badge/Emulator-QEMU-FF6600?style=for-the-badge">
 </p>
 
 <p align="center">
-  <a href="#getting-started">Getting Started</a>
+  <a href="#-phase-1-overview">Phase 1 Overview</a>
   ·
-  <a href="#architecture">Architecture</a>
+  <a href="#-architecture--boot-flow">Architecture</a>
   ·
-  <a href="#roadmap">Roadmap</a>
+  <a href="#-project-structure">Project Structure</a>
+  ·
+  <a href="#-getting-started">Getting Started</a>
+  ·
+  <a href="#-debugging-with-gdb">Debugging</a>
+  ·
+  <a href="#-roadmap">Roadmap</a>
 </p>
 
 ---
 
-### A Hobby Operating System Built From Scratch
+## 🌟 Development Principle
 
-**Nyota OS** is an experimental hobby operating system developed from the ground up to explore low-level programming, boot processes, operating system fundamentals, and direct interaction with computer hardware.
-
-The project is written primarily in **C and Assembly** and is built using a Linux/WSL development environment. The resulting bootable image can be tested using **QEMU**.
-
-> **Nyota** means "star" in Swahili, representing the goal of exploring the lower layers of computing one step at a time.
-
----
-
-<p align="center">
-  <a href="#getting-started">
-    <img src="https://img.shields.io/badge/Get%20Started-111111?style=for-the-badge&logo=rocket&logoColor=white" alt="Get Started">
-  </a>
-  <a href="#architecture">
-    <img src="https://img.shields.io/badge/Architecture-111111?style=for-the-badge&logo=linux&logoColor=white" alt="Architecture">
-  </a>
-  <a href="#roadmap">
-    <img src="https://img.shields.io/badge/Roadmap-111111?style=for-the-badge&logo=github&logoColor=white" alt="Roadmap">
-  </a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Language-C-00599C?style=flat-square&logo=c&logoColor=white">
-  <img src="https://img.shields.io/badge/Assembly-x86-525252?style=flat-square">
-  <img src="https://img.shields.io/badge/Assembler-NASM-111111?style=flat-square">
-  <img src="https://img.shields.io/badge/Compiler-GCC-234?style=flat-square&logo=gnu&logoColor=white">
-  <img src="https://img.shields.io/badge/Emulator-QEMU-FF6600?style=flat-square">
-  <img src="https://img.shields.io/badge/Build-Make-427819?style=flat-square">
-</p>
+> **"Build the foundation before building the illusion."**
+>
+> Every subsystem added to Nyota should have a clear interface, a testable implementation, and a reason to exist.
+> The goal isn't to make Nyota look like an operating system.
+> **The goal is to make Nyota actually behave like one.**
 
 ---
 
-## 📸 Project Preview
+# 🚀 Phase 1 Overview
 
-> Add a screenshot of Nyota OS running in QEMU here.
+**Current Status:** **Phase 1 — Kernel Foundation & Boot Architecture** (Completed)
+
+Phase 1 establishes a clean, bootable, maintainable 64-bit kernel foundation for Nyota OS:
+
+- Boots from a raw disk image via standard BIOS in QEMU.
+- Executes two-stage bootloader:
+  - **Stage 1 (MBR)**: Initializes segments, validates BIOS boot drive, loads Stage 2 from disk.
+  - **Stage 2**: Enables A20 gate, verifies CPUID & 64-bit Long Mode support, sets up 4-level PML4 paging (identity-mapping 0–16 MB using 2 MB huge pages), builds 64-bit GDT, enables PAE/LME/PG, transitions to 64-bit Long Mode, relocates the kernel to `0x100000` (1 MB mark), and transfers control.
+- Executes 64-bit C kernel at entry point `0x100000` with an aligned stack.
+- Configures 64-bit kernel Global Descriptor Table (GDT).
+- Inspects CPU vendor string and hardware features using CPUID (SSE, SSE2, SSE3, APIC, PAE, Long Mode, NX).
+- Provides VGA 80x25 text-mode console with hardware cursor, color support, and automatic scrolling.
+- Mirrors console output to COM1 serial port (`0x3F8`) for instant host terminal diagnostics.
+- Implements kernel logging interface (`kprint`, `kprintln`, `klog`, `kinfo`, `kwarn`, `kerror`) and safe kernel panic system (`kernel_panic`).
+- Enters safe idle loop (`hlt`).
+- Reproducible cross-platform build system generating `build/nyota.img` in one command.
+
+---
+
+# 🏗️ Architecture & Boot Flow
 
 ```text
-docs/
-└── nyota-os-qemu.png
+BIOS (Real Mode, 16-bit)
+ │
+ ▼
+Stage 1 Boot Sector (boot/boot.asm, loaded at 0x7C00)
+ │  - Reads Stage 2 (4 sectors) to 0x8000
+ │  - Verifies disk read and transfers control
+ ▼
+Stage 2 Bootloader (boot/stage2.asm, loaded at 0x8000)
+ │  - Loads Kernel binary from disk into buffer (0x10000)
+ │  - Enables A20 line (Fast A20 + BIOS fallback)
+ │  - Verifies CPUID and 64-bit Long Mode capability
+ │  - Prepares 4-level PML4 Page Tables (identity maps 0 - 16 MB)
+ │  - Loads 64-bit GDT (Code & Data selectors)
+ │  - Enables PAE (CR4.PAE = 1)
+ │  - Enables Long Mode (EFER.LME = 1)
+ │  - Enables Paging & Protection (CR0.PG = 1, CR0.PE = 1)
+ │  - Far jumps into 64-bit Long Mode
+ ▼
+64-bit Long Mode Transition
+ │  - Relocates kernel from buffer to 0x100000 (1 MB mark)
+ │  - Jumps to 0x100000
+ ▼
+Kernel Entry (kernel/kernel_entry.asm)
+ │  - Establishes 64-bit stack (RSP = 0x90000)
+ │  - Clears CPU state and direction flag (DF = 0)
+ │  - Calls kernel_main()
+ ▼
+Kernel Main (kernel/kernel.c)
+ │  - Brings up Serial console (COM1, 115200 baud)
+ │  - Brings up VGA text-mode driver (0xB8000)
+ │  - Installs kernel GDT
+ │  - Interrogates CPUID hardware features
+ │  - Emits boot banner and subsystem verification status
+ │  - Enters safe idle loop (hlt)
 ```
-
-Example:
-
-![Nyota OS running in QEMU](assets/Qemu.png)
-
----
-
-# 🧠 What Is Nyota OS?
-
-Nyota OS is a **from-scratch operating system project** created to understand what happens underneath applications and modern operating systems.
-
-Instead of relying on an existing operating system kernel, the project explores the fundamentals involved in creating a bootable system.
-
-The project focuses on understanding concepts such as:
-
-* Boot processes
-* Low-level programming
-* Assembly
-* C at the system level
-* Kernel development
-* Hardware interaction
-* Memory
-* Computer architecture
-* Build systems
-* Emulator-based operating system development
-
-The project is intentionally experimental and will evolve as new operating system concepts are implemented.
-
----
-
-# ✨ Current Features
-
-Nyota OS currently includes the foundations required to produce and boot the operating system image.
-
-### Current Capabilities
-
-* 🥾 Bootable operating system image
-* ⚙️ Custom low-level code
-* 🧠 C-based system development
-* 🔧 x86 Assembly
-* 🔗 Custom linking/build process
-* 💾 Bootable disk image generation
-* 🖥️ QEMU-based execution
-* 🐧 Linux/WSL development environment
-
-> Nyota OS is an ongoing project. Features will be added incrementally as development continues.
-
----
-
-# 🏗️ Architecture
-
-At a high level, Nyota OS follows a simple low-level execution path:
-
-```text
-┌──────────────────────┐
-│      Computer        │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│      Boot Process    │
-│      Assembly        │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│      Kernel          │
-│      C + Assembly    │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Hardware / Memory /  │
-│ System Interfaces    │
-└──────────────────────┘
-```
-
-The architecture will become more sophisticated as additional kernel and hardware functionality is implemented.
-
----
-
-# 🛠️ Development Environment
-
-Nyota OS is currently developed and tested using:
-
-| Tool             | Purpose                    |
-| ---------------- | -------------------------- |
-| **C**            | Kernel/system programming  |
-| **x86 Assembly** | Low-level and boot code    |
-| **NASM**         | Assembler                  |
-| **GCC**          | C compilation              |
-| **GNU LD**       | Linking                    |
-| **GNU objcopy**  | Binary/image generation    |
-| **GNU Make**     | Build automation           |
-| **QEMU**         | Operating system emulation |
-| **Linux / WSL2** | Development environment    |
-
----
-
-# 📋 Prerequisites
-
-Before building Nyota OS, install the required development tools.
-
-On Debian/Ubuntu-based Linux or WSL:
-
-```bash
-sudo apt update
-```
-
-Install the basic toolchain:
-
-```bash
-sudo apt install build-essential nasm binutils make qemu-system-x86
-```
-
-Verify the installations:
-
-```bash
-gcc --version
-nasm --version
-ld --version
-objcopy --version
-make --version
-qemu-system-i386 --version
-```
-
-You should see version information for each tool.
-
----
-
-# 🚀 Getting Started
-
-Nyota OS is developed using Linux-based tools such as GCC, NASM, Make, Binutils, and QEMU.
-
-If you are using Windows, the recommended setup is WSL2 (Windows Subsystem for Linux). This allows the Linux development toolchain to run inside Windows while keeping the project workflow close to a normal Linux environment.
-
-## 🪟 Windows + WSL2
-
-1. Install or update WSL
-
-Open PowerShell as Administrator and run:
-
-```powershell
-wsl --update
-```
-
-Check your WSL installation:
-
-```powershell
-wsl --status
-```
-
-Check your installed Linux distributions and confirm they are using WSL2:
-
-```powershell
-wsl -l -v
-```
-
-The VERSION column should show:
-
-```text
-2
-```
-
-2. Open WSL
-
-From PowerShell:
-
-```powershell
-wsl
-```
-
-Your terminal will now be inside your Linux environment.
-
-3. Install the Nyota OS toolchain
-
-Inside WSL:
-
-```bash
-sudo apt update
-sudo apt install build-essential nasm binutils make qemu-system-x86
-```
-
-Verify the tools:
-
-```bash
-gcc --version
-nasm --version
-ld --version
-objcopy --version
-make --version
-qemu-system-i386 --version
-```
-
-## 4. Clone the repository
-
-Inside WSL:
-
-```bash
-git clone https://github.com/YOUR_USERNAME/nyota-os.git
-cd nyota-os
-```
-
-If you already cloned the repository on Windows, you can access it from WSL through `/mnt/`.
-
-For example, a Windows path such as:
-
-```text
-C:\Users\YourName\Projects\nyota-os
-```
-
-becomes:
-
-```bash
-cd /mnt/c/Users/YourName/Projects/nyota-os
-```
-
-## 5. Build Nyota OS
-
-From the Nyota OS project directory:
-
-```bash
-make
-```
-
-The Makefile compiles the required C and Assembly components and generates the bootable image.
-
-If the build succeeds, you should have the generated Nyota OS image in the project directory.
-
-## 6. Run Nyota OS with QEMU
-
-Start the generated image with:
-
-```bash
-qemu-system-i386 -drive format=raw,file=nyota.img
-```
-
-If the generated image has a different filename, replace `nyota.img` with the correct filename.
-
-A QEMU window should open and boot Nyota OS.
-
-## ⚡ Quick Build & Run
-
-Once WSL and the required tools are installed:
-
-```bash
-cd /path/to/nyota-os
-make
-qemu-system-i386 -drive format=raw,file=nyota.img
-```
-
-## 🪟 Running from Windows PowerShell
-
-You can also run WSL commands directly from PowerShell.
-
-For example:
-
-```powershell
-wsl bash -lc "cd /mnt/c/Users/YourName/Projects/nyota-os && make"
-```
-
-To build and launch QEMU:
-
-```powershell
-wsl bash -lc "cd /mnt/c/Users/YourName/Projects/nyota-os && qemu-system-i386 -drive format=raw,file=nyota.img"
-```
-
-For multiple commands, entering WSL with:
-
-```powershell
-wsl
-```
-
-and working directly inside the Linux shell is usually easier.
-
-## 🖥️ If QEMU Does Not Open a Graphical Window
-
-QEMU's graphical window on Windows through WSL depends on WSLg.
-
-First update WSL from an Administrator PowerShell:
-
-```powershell
-wsl --update
-```
-
-Then restart WSL:
-
-```powershell
-wsl --shutdown
-```
-
-Open WSL again:
-
-```powershell
-wsl
-```
-
-Then retry:
-
-```bash
-qemu-system-i386 -drive format=raw,file=nyota.img
-```
-
-If it still fails, verify that your Linux distribution is running under WSL2:
-
-```powershell
-wsl -l -v
-```
-
-## ⚠️ Safety
-
-Nyota OS is experimental.
-
-Do not write `nyota.img` directly to a physical disk or USB drive unless you fully understand the command and its consequences.
-
-Use QEMU for development and testing. It provides a virtual environment where Nyota OS can be safely booted without modifying your host operating system.
-
----
-
-# 🖥️ Running Nyota OS
-
-A successful launch should boot the generated Nyota OS image inside QEMU.
-
-```text
-Host Operating System
-        │
-        ▼
-      QEMU
-        │
-        ▼
-   nyota.img
-        │
-        ▼
-  Boot Process
-        │
-        ▼
-    Nyota OS
-```
-
-QEMU allows development and testing without installing Nyota OS directly onto physical hardware.
-
-**Do not write experimental OS images directly to a physical disk unless you fully understand the consequences.**
 
 ---
 
 # 📁 Project Structure
 
-The exact structure may evolve as the operating system grows.
-
-A typical structure is:
-
 ```text
 nyota-os/
 │
-├── boot/              # Boot-related code
+├── boot/
+│   ├── boot.asm             # Stage 1 MBR boot sector (512 bytes, 0xAA55)
+│   └── stage2.asm           # Stage 2: A20, CPUID, Paging, GDT, Long Mode switch
 │
-├── kernel/            # Kernel implementation
+├── kernel/
+│   ├── kernel.c             # C kernel entry (kernel_main) and logging
+│   ├── kernel_entry.asm     # 64-bit entry point, stack setup, calls kernel_main
+│   │
+│   ├── arch/
+│   │   └── x86_64/
+│   │       └── io.h         # Architecture port I/O wrappers
+│   │
+│   ├── cpu/
+│   │   ├── cpu.c            # CPUID hardware feature detection & vendor query
+│   │   ├── gdt.c            # 64-bit Global Descriptor Table setup
+│   │   └── gdt_flush.asm    # 64-bit GDTR reload and CS/DS refresh
+│   │
+│   └── memory/
+│       └── memory.c         # Freestanding memset, memcpy, memmove, memcmp, strlen
 │
-├── src/               # C source files
+├── include/
+│   ├── types.h              # Freestanding fixed-width types (uint64_t, bool, etc.)
+│   ├── kernel.h             # Logging macros (kinfo, kwarn, kerror) and kernel_panic
+│   ├── cpu.h                # CPU capabilities and CPUID interface
+│   ├── gdt.h                # GDT constants and initialization prototype
+│   ├── vga.h                # VGA colors, cursor positioning, and print APIs
+│   ├── serial.h             # COM1 serial driver interface
+│   ├── io.h                 # Port I/O (inb, outb, inw, outw, inl, outl)
+│   └── memory.h             # Memory and string function declarations
 │
-├── include/           # Header files
+├── drivers/
+│   ├── vga.c                # 80x25 text-mode driver at 0xB8000 with scrolling
+│   └── serial.c             # 16550 UART serial driver (115200 8N1)
 │
-├── Makefile           # Build automation
+├── tools/
+│   └── mkimage.c            # Cross-platform disk image builder (creates nyota.img)
 │
-├── linker.ld          # Linker script
-│
-├── README.md
-│
-└── .gitignore
+├── linker.ld                # 64-bit kernel linker script (load address 0x100000)
+├── Makefile                 # Reproducible build system
+└── README.md                # Project documentation
 ```
-
-Generated build artifacts should not be committed to the main source tree.
 
 ---
 
-# 🔬 Development Philosophy
+# 🛠️ Toolchain
 
-Nyota OS is being developed primarily as a **learning and experimentation project**.
+The following tools are required to build and run Nyota OS:
 
-The goal is not to immediately reproduce Linux or another production operating system.
+| Tool | Recommended Version | Purpose |
+| :--- | :--- | :--- |
+| **NASM** | 2.15+ / 3.02 | 16-bit and 64-bit Assembler |
+| **GCC** | 9.0+ / 16.x | Freestanding C compiler (`-m64 -mabi=sysv`) |
+| **GNU Binutils** | 2.34+ | Linker (`ld`) and binary extractor (`objcopy`) |
+| **GNU Make** | 4.0+ | Build automation |
+| **QEMU** | 7.0+ / 11.x | System emulator (`qemu-system-x86_64`) |
+| **GDB** | 10.0+ | Remote kernel debugger |
+| **Git** | 2.30+ | Version control |
 
-Instead, development follows a gradual approach:
+Verify your toolchain:
 
-```text
-Boot
- │
- ▼
-Low-Level Initialization
- │
- ▼
-Kernel
- │
- ▼
-Memory
- │
- ▼
-Interrupts
- │
- ▼
-Hardware Interaction
- │
- ▼
-Drivers
- │
- ▼
-Processes
- │
- ▼
-File System
- │
- ▼
-User Space
+```bash
+nasm -v
+gcc --version
+ld --version
+objcopy --version
+make --version
+qemu-system-x86_64 --version
+gdb --version
+git --version
 ```
 
-Each stage provides a deeper understanding of how operating systems interact with hardware.
+---
+
+# 🚀 Getting Started
+
+Nyota OS builds natively on **Windows (MinGW-w64 / MSYS2)** as well as **Linux / WSL2**.
+
+### 1. Build the OS Image
+
+```bash
+make
+```
+
+Sample output:
+
+```text
+[BUILD] boot/boot.asm
+[BUILD] boot/stage2.asm
+[BUILD] kernel/kernel_entry.asm
+[BUILD] kernel/cpu/gdt_flush.asm
+[BUILD] kernel/kernel.c
+[BUILD] kernel/memory/memory.c
+[BUILD] kernel/cpu/cpu.c
+[BUILD] kernel/cpu/gdt.c
+[BUILD] drivers/vga.c
+[BUILD] drivers/serial.c
+[LINK]  build/kernel.elf
+[STRIP] build/kernel.bin
+[HOST]  tools/mkimage.c
+[IMAGE] build/nyota.img
+
+  [IMAGE] build/nyota.img created successfully (1440 KB / 2880 sectors)
+    Sector 0      (0x000000): boot.bin   (512 bytes)
+    Sectors 1..4  (0x000200): stage2.bin (2048 bytes)
+    Sectors 5..15 (0x000A00): kernel.bin (5632 bytes, 11 sectors)
+
+==========================================================
+  Build successful: build/nyota.img
+  Launch in QEMU with: make run
+==========================================================
+```
+
+### 2. Run in QEMU
+
+```bash
+make run
+```
+
+This launches QEMU with graphical VGA window and interactive terminal serial output.
+
+### 3. Headless Run (Serial Output Only)
+
+For quick tests or CI environments without a graphical window:
+
+```bash
+make run-serial
+```
+
+### Expected Boot Output
+
+```text
+========================================
+              NYOTA OS                  
+========================================
+
+[INFO]  Bootloader initialized
+[INFO]  CPU: x86_64
+[INFO]  GDT initialized
+[INFO]  Paging enabled
+[INFO]  Kernel loaded
+[INFO]  Kernel initialization complete
+
+CPU Information
+-------------------------
+Vendor   : AuthenticAMD (or GenuineIntel)
+Mode     : x86_64
+Features :
+  SSE
+  SSE2
+  SSE3
+  APIC
+  PAE
+  Long Mode (x86_64)
+  NX (No-Execute)
+
+Bootloader       : OK
+CPU              : x86_64
+Long Mode        : OK
+Paging           : OK
+GDT              : OK
+Kernel           : OK
+
+----------------------------------------
+
+Nyota Kernel v0.1
+System initialized successfully.
+
+nyota kernel is running...
+```
+
+---
+
+# 🐞 Debugging with GDB
+
+Nyota OS includes built-in support for source-level kernel debugging via QEMU's GDB server.
+
+### 1. Launch QEMU in Debug Mode
+
+```bash
+make run-debug
+```
+
+QEMU will start, freeze the CPU at the reset vector, and listen for GDB connections on TCP port `1234`.
+
+### 2. Connect GDB
+
+In another terminal window:
+
+```bash
+gdb build/kernel.elf
+```
+
+Inside GDB:
+
+```gdb
+(gdb) target remote localhost:1234
+(gdb) break kernel_main
+(gdb) continue
+(gdb) info registers rip rsp rax
+(gdb) step
+```
+
+---
+
+# 🧰 Build Commands Reference
+
+| Command | Description |
+| :--- | :--- |
+| `make` / `make all` | Build complete bootable image (`build/nyota.img`) |
+| `make run` | Launch OS in QEMU with VGA display & serial console |
+| `make run-serial` | Run in QEMU headless (prints serial output directly to terminal) |
+| `make run-debug` | Launch QEMU with GDB stub paused on port 1234 |
+| `make debug` | Build with debug symbols enabled (`-g`) |
+| `make clean` | Remove all generated binaries and build artifacts |
+| `make rebuild` | Perform a clean build from scratch |
+| `make help` | Display available build targets |
+
+---
+
+# ⚠️ Current Limitations (Phase 1)
+
+Phase 1 deliberately focuses exclusively on establishing a rock-solid boot architecture and 64-bit kernel foundation. The following are intentionally deferred to future phases:
+
+- Hardware interrupts are disabled (`cli`).
+- Interrupt Descriptor Table (IDT) and exception handling are deferred to Phase 2.
+- Interactive keyboard input driver is deferred to Phase 2.
+- Dynamic physical and virtual memory allocation (heap / malloc) is deferred to Phase 3.
+- Multitasking, scheduler, filesystems, and userland applications belong to later phases.
 
 ---
 
 # 🗺️ Roadmap
 
-Nyota OS is an ongoing project.
-
-### Phase 1 — Boot Foundation
-
-* [x] Bootable image
-* [x] Assembly boot code
-* [x] Basic build pipeline
-* [x] QEMU boot testing
-
-### Phase 2 — Kernel Foundation
-
-* [x] Kernel entry
-* [x] C-based kernel development
-* [x] Linker configuration
-* [x] Kernel/image integration
-
-### Phase 3 — System Interaction
-
-* [x] Initial system interaction
-* [ ] Keyboard input improvements
-* [ ] Interrupt handling
-* [ ] IDT
-* [ ] GDT improvements
-
-### Phase 4 — Memory
-
-* [ ] Memory map
-* [ ] Physical memory management
-* [ ] Heap
-* [ ] Paging
-* [ ] Virtual memory
-
-### Phase 5 — Hardware
-
-* [ ] Keyboard driver
-* [ ] Timer
-* [ ] VGA/framebuffer improvements
-* [ ] Device abstractions
-
-### Phase 6 — Processes
-
-* [ ] Process management
-* [ ] Context switching
-* [ ] Scheduling
-* [ ] User/kernel separation
-
-### Phase 7 — Storage
-
-* [ ] File-system design
-* [ ] Disk abstraction
-* [ ] File operations
-
-### Phase 8 — User Space
-
-* [ ] System calls
-* [ ] Shell
-* [ ] Basic user programs
-* [ ] User-space memory
-
-> Roadmap items are experimental goals and may change as the project evolves.
-
----
-
-# 🧪 Testing
-
-Nyota OS is primarily tested through QEMU.
-
-Build:
-
-```bash
-make
-```
-
-Run:
-
-```bash
-qemu-system-i386 -drive format=raw,file=nyota.img
-```
-
-The emulator provides a safe environment for testing boot and kernel changes without modifying the host operating system.
-
----
-
-# 🧰 Build Commands
-
-Common commands:
-
-```bash
-# Build
-make
-
-# Clean generated files
-make clean
-
-# Build again
-make clean && make
-```
-
-If additional Makefile targets are available, they should be documented here.
-
----
-
-# 📷 Screenshots
-
-Screenshots and development captures will be added as the project evolves.
-
-Recommended:
-
 ```text
-docs/
-├── boot.png
-├── qemu.png
-├── kernel.png
-└── architecture.png
+Phase 1: Kernel Foundation & Boot Architecture  ◄ [COMPLETED]
+   ├── BIOS MBR Bootloader (16-bit)
+   ├── Stage 2 Bootloader & A20 Gate
+   ├── 4-Level Paging (Identity Mapping 0-16MB)
+   ├── 64-bit Long Mode Transition
+   ├── 64-bit Kernel Entry & C Runtime
+   ├── Global Descriptor Table (GDT)
+   ├── CPUID Feature Interrogation
+   ├── VGA Text Mode Driver & Scrolling
+   ├── Serial COM1 Diagnostics
+   ├── Kernel Logging & Panic System
+   └── Automated Bootable Image Generation
+
+Phase 2: Interrupts & Input Architecture         ◄ [NEXT]
+   ├── Interrupt Descriptor Table (IDT)
+   ├── CPU Exception Handlers (Page Fault, GPF, etc.)
+   ├── 8259 PIC / APIC Configuration
+   ├── Programmable Interval Timer (PIT)
+   ├── PS/2 Keyboard Controller Driver
+   └── Interactive Kernel Shell
+
+Phase 3: Memory Management
+   ├── Physical Memory Allocator (Bitmap / Buddy)
+   ├── Virtual Memory Manager & Dynamic Paging
+   └── Kernel Heap (kmalloc / kfree)
+
+Phase 4: Multitasking & Processes
+   ├── Task State Segment (TSS)
+   ├── Context Switching
+   └── Round-Robin Cooperative/Preemptive Scheduler
+
+Phase 5: Filesystem & Storage
+   ├── IDE / ATA Disk Driver
+   └── Virtual File System (VFS) & FAT32 / TAR FS
+
+Phase 6: User Space & System Calls
+   ├── Ring 3 User Mode Transition
+   ├── Syscall Interface (syscall / sysret)
+   └── Basic Userland Shell & Utilities
 ```
-
----
-
-# 🎯 Project Goals
-
-Nyota OS exists to answer a simple question:
-
-> **What actually happens between turning on a computer and running software?**
-
-Through building the system from the ground up, the project explores:
-
-* How machines boot
-* How processors execute instructions
-* How C interacts with hardware
-* How Assembly fits into system software
-* How kernels are structured
-* How memory is managed
-* How hardware communicates with software
-* How operating systems provide abstractions
-
----
-
-# 🔐 Security Perspective
-
-Because Nyota OS is part of a broader cybersecurity and systems-learning journey, the project also provides a foundation for understanding security at a lower level.
-
-Future areas of exploration may include:
-
-* Memory isolation
-* Privilege levels
-* Kernel attack surfaces
-* Secure boot concepts
-* Process isolation
-* System-call security
-* Memory corruption
-* Hardware security boundaries
-
-These areas will be explored as the operating system becomes more capable.
-
----
-
-# ⚠️ Disclaimer
-
-Nyota OS is an **experimental educational operating system project**.
-
-It is not intended to replace a production operating system and should not be considered production-ready.
-
-Run the system inside an emulator such as **QEMU** during development.
-
-Do not install experimental builds directly onto important physical storage devices.
-
----
-
-# 🤝 Contributing
-
-Nyota OS is primarily a personal learning project, but ideas, discussions, and educational contributions are welcome.
-
-If you find an issue or have an interesting idea:
-
-1. Open an issue.
-2. Explain the problem or proposal.
-3. Include reproduction steps where applicable.
-4. Provide relevant logs or screenshots.
-
-Pull requests should remain focused and clearly documented.
-
----
-
-# 📚 Learning Resources
-
-Nyota OS development involves concepts from:
-
-* Operating systems
-* Computer architecture
-* C programming
-* Assembly programming
-* x86 architecture
-* Linkers and loaders
-* Boot processes
-* Kernel development
-
-The project itself is intended to be a practical way of learning these concepts rather than simply reading about them.
 
 ---
 
 # 👨‍💻 Author
 
-**Sahil**
-
-Computer Science Engineering Student
-Cybersecurity
-
-Interested in:
-
-**Cybersecurity • Software Engineering • Systems • Networking • Low-Level Programming**
+**Sahil**  
+Computer Science Engineering Student  
+Focus: **Cybersecurity • Systems Programming • Operating Systems • Computer Architecture**
 
 ---
 
 <p align="center">
-  **Built from the ground up. One instruction at a time.**
-</p>
-
----
-
-<p align="center">
-  ⭐ If you find Nyota OS interesting, consider starring the repository.
+  ⭐ <strong>Nyota OS — Built from the ground up. One instruction at a time.</strong>
 </p>

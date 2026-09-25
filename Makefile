@@ -1,17 +1,37 @@
 # =============================================================================
-# Nyota OS — Makefile
-# Run all targets inside WSL: wsl make [target]
+# Nyota OS — Makefile (Phase 1: x86_64 Kernel Foundation)
+# Builds a bootable 64-bit OS image running under QEMU.
 # =============================================================================
+
+# ── Cross-Platform Detection ─────────────────────────────────────────────────
+ifeq ($(OS),Windows_NT)
+    HOST_OS   := windows
+    EXE_EXT   := .exe
+    ASM_FMT   := win64
+    LD_FLAGS  := -m i386pep --image-base 0x0 --section-alignment 0x10 --file-alignment 0x10
+    CLEAN_CMD := if exist $(BUILD_DIR) rd /s /q $(BUILD_DIR)
+    MKDIR_CMD := if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+else
+    HOST_OS   := linux
+    EXE_EXT   :=
+    ASM_FMT   := elf64
+    LD_FLAGS  := -m elf_x86_64
+    CLEAN_CMD := rm -rf $(BUILD_DIR)
+    MKDIR_CMD := mkdir -p $(BUILD_DIR)
+endif
 
 # ── Toolchain ─────────────────────────────────────────────────────────────────
 CC      := gcc
 LD      := ld
 NASM    := nasm
 OBJCOPY := objcopy
+QEMU    := qemu-system-x86_64
+GDB     := gdb
 
-# ── Compiler flags (freestanding 32-bit kernel, no stdlib) ───────────────────
+# ── Compiler Flags (Freestanding x86_64 Kernel) ──────────────────────────────
 CFLAGS := \
-    -m32                           \
+    -m64                           \
+    -mabi=sysv                     \
     -ffreestanding                 \
     -fno-pie                       \
     -fno-pic                       \
@@ -19,115 +39,146 @@ CFLAGS := \
     -nostartfiles                  \
     -fno-builtin                   \
     -fno-stack-protector           \
-    -fno-tree-loop-distribute-patterns \
+    -fno-asynchronous-unwind-tables\
+    -fno-unwind-tables             \
+    -mno-red-zone                  \
     -Wall                          \
     -Wextra                        \
-    -Ikernel                       \
+    -Iinclude                      \
     -std=gnu99                     \
-    -O0
+    -O2
 
-# ── Output files ──────────────────────────────────────────────────────────────
-BUILD_DIR  := build
-BOOT_BIN   := $(BUILD_DIR)/boot.bin
-KERNEL_ELF := $(BUILD_DIR)/kernel.elf
-KERNEL_BIN := $(BUILD_DIR)/kernel.bin
-IMAGE      := nyota.img
+# ── Directories & Output Files ────────────────────────────────────────────────
+BUILD_DIR   := build
+BOOT_BIN    := $(BUILD_DIR)/boot.bin
+STAGE2_BIN  := $(BUILD_DIR)/stage2.bin
+KERNEL_ELF  := $(BUILD_DIR)/kernel.elf
+KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
+IMAGE       := $(BUILD_DIR)/nyota.img
+MKIMAGE     := $(BUILD_DIR)/mkimage$(EXE_EXT)
 
-# ── Source → object mapping ───────────────────────────────────────────────────
-KERNEL_ENTRY_OBJ := $(BUILD_DIR)/kernel_entry.o
+# ── Kernel Object Files ───────────────────────────────────────────────────────
+KERNEL_ASM_OBJS := \
+    $(BUILD_DIR)/kernel_entry.o     \
+    $(BUILD_DIR)/gdt_flush.o
 
-KERNEL_OBJS := \
-    $(BUILD_DIR)/kernel.o      \
-    $(BUILD_DIR)/vga.o         \
-    $(BUILD_DIR)/serial.o      \
-    $(BUILD_DIR)/gdt.o         \
-    $(BUILD_DIR)/gdt_flush.o   \
-    $(BUILD_DIR)/idt.o         \
-    $(BUILD_DIR)/idt_asm.o     \
-    $(BUILD_DIR)/keyboard.o    \
-    $(BUILD_DIR)/shell.o
+KERNEL_C_OBJS := \
+    $(BUILD_DIR)/kernel.o           \
+    $(BUILD_DIR)/memory.o           \
+    $(BUILD_DIR)/cpu.o              \
+    $(BUILD_DIR)/gdt.o              \
+    $(BUILD_DIR)/vga.o              \
+    $(BUILD_DIR)/serial.o
 
-# ── Default target ─────────────────────────────────────────────────────────────
-.PHONY: all clean run run-debug help
+ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
+# ── Phony Targets ─────────────────────────────────────────────────────────────
+.PHONY: all run run-debug run-serial debug clean rebuild help
+
+# Default target: build bootable disk image
 all: $(IMAGE)
-	@echo ""
-	@echo "  ✓  Build complete → $(IMAGE)"
-	@echo "     Run with: wsl make run"
-	@echo ""
+	@echo.
+	@echo ==========================================================
+	@echo   Build successful: $(IMAGE)
+	@echo   Launch in QEMU with: make run
+	@echo ==========================================================
+	@echo.
 
-# ── Floppy disk image ─────────────────────────────────────────────────────────
-# Layout:
-#   Sector 0  (bytes     0-511): bootloader (boot.bin)
-#   Sectors 1-50 (bytes 512-25599): kernel   (kernel.bin)
-$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
-	dd if=/dev/zero    of=$(IMAGE) bs=512 count=2880 2>/dev/null
-	dd if=$(BOOT_BIN)  of=$(IMAGE) conv=notrunc 2>/dev/null
-	dd if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=1 conv=notrunc 2>/dev/null
+# ── Build Disk Image with host mkimage tool ───────────────────────────────────
+$(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(MKIMAGE)
+	@echo [IMAGE] $(IMAGE)
+	@$(MKIMAGE) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE)
 
-# ── Bootloader ────────────────────────────────────────────────────────────────
-$(BOOT_BIN): bootloader/boot.asm | $(BUILD_DIR)
-	$(NASM) -f bin $< -o $@
+# Host tool to assemble disk image
+$(MKIMAGE): tools/mkimage.c | $(BUILD_DIR)
+	@echo [HOST]  tools/mkimage.c
+	@$(CC) -O2 $< -o $@
 
-# ── Kernel: link ELF, then strip to flat binary ───────────────────────────────
+# ── Bootloader Stage 1 (MBR) ──────────────────────────────────────────────────
+$(BOOT_BIN): boot/boot.asm | $(BUILD_DIR)
+	@echo [BUILD] boot/boot.asm
+	@$(NASM) -f bin $< -o $@
+
+# ── Bootloader Stage 2 (Long Mode Setup) ───────────────────────────────────────
+$(STAGE2_BIN): boot/stage2.asm | $(BUILD_DIR)
+	@echo [BUILD] boot/stage2.asm
+	@$(NASM) -f bin $< -o $@
+
+# ── Kernel: Link ELF / PE, then extract flat binary ───────────────────────────
 $(KERNEL_BIN): $(KERNEL_ELF)
-	$(OBJCOPY) -O binary $< $@
+	@echo [STRIP] $(KERNEL_BIN)
+	@$(OBJCOPY) -O binary $< $@
 
-$(KERNEL_ELF): $(KERNEL_ENTRY_OBJ) $(KERNEL_OBJS) linker.ld
-	$(LD) -m elf_i386 -T linker.ld -o $@ $(KERNEL_ENTRY_OBJ) $(KERNEL_OBJS)
+$(KERNEL_ELF): $(ALL_KERNEL_OBJS) linker.ld
+	@echo [LINK]  $(KERNEL_ELF)
+	@$(LD) $(LD_FLAGS) -T linker.ld -e kernel_entry -o $@ $(ALL_KERNEL_OBJS)
 
-# ── Assembly objects ──────────────────────────────────────────────────────────
-$(KERNEL_ENTRY_OBJ): kernel/kernel_entry.asm | $(BUILD_DIR)
-	$(NASM) -f elf32 $< -o $@
+# ── Assembly Compilation ──────────────────────────────────────────────────────
+$(BUILD_DIR)/kernel_entry.o: kernel/kernel_entry.asm | $(BUILD_DIR)
+	@echo [BUILD] kernel/kernel_entry.asm
+	@$(NASM) -f $(ASM_FMT) $< -o $@
 
-$(BUILD_DIR)/gdt_flush.o: kernel/gdt/gdt_flush.asm | $(BUILD_DIR)
-	$(NASM) -f elf32 $< -o $@
+$(BUILD_DIR)/gdt_flush.o: kernel/cpu/gdt_flush.asm | $(BUILD_DIR)
+	@echo [BUILD] kernel/cpu/gdt_flush.asm
+	@$(NASM) -f $(ASM_FMT) $< -o $@
 
-$(BUILD_DIR)/idt_asm.o: kernel/idt/idt_asm.asm | $(BUILD_DIR)
-	$(NASM) -f elf32 $< -o $@
-
-# ── C objects ─────────────────────────────────────────────────────────────────
+# ── C Compilation ─────────────────────────────────────────────────────────────
 $(BUILD_DIR)/kernel.o: kernel/kernel.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo [BUILD] kernel/kernel.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/vga.o: kernel/vga/vga.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/memory.o: kernel/memory/memory.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/memory/memory.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/serial.o: kernel/serial/serial.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/cpu.o: kernel/cpu/cpu.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/cpu/cpu.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/gdt.o: kernel/gdt/gdt.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/gdt.o: kernel/cpu/gdt.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/cpu/gdt.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/idt.o: kernel/idt/idt.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/vga.o: drivers/vga.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/vga.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/keyboard.o: kernel/keyboard/keyboard.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/serial.o: drivers/serial.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/serial.c
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: kernel/shell/shell.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-# ── Build directory ───────────────────────────────────────────────────────────
+# ── Build Directory ───────────────────────────────────────────────────────────
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+	@$(MKDIR_CMD)
 
 # ── Run in QEMU ───────────────────────────────────────────────────────────────
 run: $(IMAGE)
-	qemu-system-i386 -fda $(IMAGE) -boot a -display curses
+	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio
 
-# Run with GDB stub attached (pause at start, attach with: gdb build/kernel.elf)
+# Run in QEMU with serial output piped to terminal without popup window
+run-serial: $(IMAGE)
+	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+
+# Run with GDB server attached (waits on port 1234)
 run-debug: $(IMAGE)
-	qemu-system-i386 -fda $(IMAGE) -boot a -s -S -display curses
+	$(QEMU) -drive format=raw,file=$(IMAGE) -s -S -serial stdio
 
-# ── Housekeeping ──────────────────────────────────────────────────────────────
+debug: CFLAGS += -g
+debug: all
+
+# ── Clean & Rebuild ───────────────────────────────────────────────────────────
 clean:
-	rm -rf $(BUILD_DIR) $(IMAGE)
-	@echo "  ✓  Clean"
+	@$(CLEAN_CMD)
+	@echo   Clean complete
+
+rebuild: clean all
 
 help:
-	@echo "Nyota OS — Build Targets"
-	@echo "  make all       Build nyota.img"
-	@echo "  make run       Launch in QEMU"
-	@echo "  make run-debug Launch in QEMU + GDB stub (port 1234)"
-	@echo "  make clean     Remove build artefacts"
+	@echo Nyota OS -- Build System Targets:
+	@echo   make              Build complete bootable image ($(IMAGE))
+	@echo   make run          Launch in QEMU (with interactive display and serial)
+	@echo   make run-serial   Launch in QEMU headless (serial output to terminal)
+	@echo   make run-debug    Launch in QEMU with GDB stub paused on port 1234
+	@echo   make clean        Remove all build artifacts and generated images
+	@echo   make rebuild      Clean build directory and build fresh image
+	@echo   make debug        Build with debug symbols (-g)

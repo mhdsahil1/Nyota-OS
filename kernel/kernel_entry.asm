@@ -1,19 +1,44 @@
 ; =============================================================================
-; Nyota OS — Kernel Entry Point
-; Linked at 0x10000 — first code the CPU executes after the bootloader hands off.
-; Sets up a C-compatible stack frame and calls kernel_main().
+; Nyota OS — Kernel Entry Point (64-bit Long Mode)
+; Linked at physical address 0x100000 (1 MB mark).
+; First instruction executed inside the Nyota Kernel.
 ; =============================================================================
 
-[bits 32]
-[extern kernel_main]
-global _start
+[bits 64]
+default rel
 
-_start:
-    ; Stack is already set up by bootloader (ESP = 0x90000)
-    ; Call the C kernel — this should never return
-    call  kernel_main
+global kernel_entry
+extern kernel_main
 
-    ; Safety net: if kernel_main somehow returns, halt forever
+section .text
+kernel_entry:
+    ; 1. Establish a clean, 16-byte aligned 64-bit stack frame
+    mov  rsp, 0x90000
+    xor  rbp, rbp
+
+    ; 2. Clear Direction Flag (DF) as required by System V AMD64 ABI
+    cld
+
+    ; 3. Clear/zero general-purpose registers
+    xor  rax, rax
+    xor  rbx, rbx
+    xor  rcx, rcx
+    xor  rdx, rdx
+    xor  rsi, rsi
+    xor  rdi, rdi
+    xor  r8,  r8
+    xor  r9,  r9
+    xor  r10, r10
+    xor  r11, r11
+    xor  r12, r12
+    xor  r13, r13
+    xor  r14, r14
+    xor  r15, r15
+
+    ; 4. Call C kernel entry point: void kernel_main(void)
+    call kernel_main
+
+    ; 5. Safety hang loop if kernel_main ever returns
 .hang:
     cli
     hlt

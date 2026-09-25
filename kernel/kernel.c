@@ -1,59 +1,132 @@
 /* =============================================================================
- * Nyota OS — kernel_main
- * Entry point called from kernel_entry.asm.  Initialises all subsystems in
- * dependency order: VGA → GDT → IDT → Keyboard → Shell.
+ * Nyota OS — Kernel Main & Core Subsystems
+ * Target: x86_64 Long Mode
  * =========================================================================== */
 
-#include <stdint.h>
-#include <stddef.h>
+#include "kernel.h"
+#include "vga.h"
+#include "serial.h"
+#include "cpu.h"
+#include "gdt.h"
+#include "memory.h"
 
-#include "vga/vga.h"
-#include "gdt/gdt.h"
-#include "idt/idt.h"
-#include "keyboard/keyboard.h"
-#include "serial/serial.h"
-#include "shell/shell.h"
+/* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
-/* ── Compiler-generated memset/memcpy stubs ───────────────────────────────
- * GCC may emit calls to these for struct/array initialisation even with
- * -fno-builtin.  Provide minimal freestanding implementations.          */
-void *memset(void *s, int c, size_t n) {
-    uint8_t *p = (uint8_t *)s;
-    while (n--) *p++ = (uint8_t)c;
-    return s;
+void kprint(const char *str) {
+    vga_print(str);
 }
 
-void *memcpy(void *dst, const void *src, size_t n) {
-    uint8_t       *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    while (n--) *d++ = *s++;
-    return dst;
+void kprintln(const char *str) {
+    vga_println(str);
 }
 
-/* ── Kernel entry ─────────────────────────────────────────────────────────── */
+void klog(const char *str) {
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    vga_print("[LOG]   ");
+    vga_println(str);
+}
+
+void kinfo(const char *str) {
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_print("[INFO]  ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println(str);
+}
+
+void kwarn(const char *str) {
+    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    vga_print("[WARN]  ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println(str);
+}
+
+void kerror(const char *str) {
+    vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    vga_print("[ERROR] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println(str);
+}
+
+/* ── Kernel Panic System ───────────────────────────────────────────────────── */
+
+void kernel_panic(const char *reason) {
+    __asm__ volatile ("cli");
+
+    vga_set_color(VGA_WHITE, VGA_RED);
+    vga_println("");
+    vga_println("========================================");
+    vga_println("          NYOTA KERNEL PANIC            ");
+    vga_println("========================================");
+    vga_println("");
+    vga_println("Reason:");
+    vga_println(reason ? reason : "Unspecified kernel panic condition.");
+    vga_println("");
+    vga_println("System halted.");
+    vga_println("========================================");
+
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+/* ── Kernel Entry ──────────────────────────────────────────────────────────── */
+
 void kernel_main(void) {
-    /* 0. Initialize serial console first */
+    /* 1. Initialize serial debug console (COM1) */
     serial_init();
-    
-    /* 1. Bring up the VGA text-mode terminal so we can print errors */
+
+    /* 2. Initialize VGA 80x25 text terminal */
     vga_init();
 
-    /* 2. Install the kernel's own GDT (replaces the bootloader's temporary GDT) */
+    /* 3. Display OS Boot Banner */
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_println("========================================");
+    vga_println("              NYOTA OS                  ");
+    vga_println("========================================");
+    vga_println("");
+
+    /* 4. Log Phase 1 Initialization Steps */
+    kinfo("Bootloader initialized");
+    kinfo("CPU: x86_64");
+
+    /* 5. Initialize Kernel GDT */
     gdt_init();
+    kinfo("GDT initialized");
 
-    /* 3. Set up the IDT and remap the 8259 PIC */
-    idt_init();
+    kinfo("Paging enabled");
+    kinfo("Kernel loaded");
 
-    /* 4. Register the PS/2 keyboard IRQ handler */
-    keyboard_init();
+    /* 6. Initialize CPUID & interrogate CPU hardware */
+    cpu_init();
+    kinfo("Kernel initialization complete");
+    vga_println("");
 
-    /* 5. Enable hardware interrupts — keyboard now works */
-    __asm__ volatile ("sti");
+    /* 7. Display CPU information */
+    cpu_print_info();
+    vga_println("");
 
-    /* 6. Print the banner and enter the interactive shell loop */
-    shell_init();
-    shell_run();
+    /* 8. Display Status Checklist & Completion Banner */
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Bootloader       : OK");
+    vga_println("CPU              : x86_64");
+    vga_println("Long Mode        : OK");
+    vga_println("Paging           : OK");
+    vga_println("GDT              : OK");
+    vga_println("Kernel           : OK");
+    vga_println("");
+    vga_println("----------------------------------------");
+    vga_println("");
 
-    /* shell_run() loops forever; we should never reach here */
-    __asm__ volatile ("cli; hlt");
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_println("Nyota Kernel v0.1");
+    vga_println("System initialized successfully.");
+    vga_println("");
+
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    vga_println("nyota kernel is running...");
+
+    /* 9. Safe idle loop */
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
 }

@@ -1,35 +1,54 @@
-/*
- * Nyota OS — Linker Script
- * Places the kernel binary at physical address 0x10000.
- * The bootloader loads the raw disk sectors there and jumps directly to _start.
- */
+/* =============================================================================
+ * Nyota OS — 64-bit Kernel Linker Script
+ * Target: x86_64 Long Mode
+ * Physical Load Address: 0x100000 (1 MB mark)
+ * =========================================================================== */
 
-ENTRY(_start)
+ENTRY(kernel_entry)
 
-SECTIONS {
-    /* Load address: physical 0x10000 (64 KB mark) */
-    . = 0x10000;
+SECTIONS
+{
+    /* Physical load address at 1MB mark */
+    . = 0x100000;
+    _kernel_start = .;
 
     /* Executable code */
     .text ALIGN(16) : {
         *(.text)
+        *(.text.*)
     }
 
-    /* Read-only data (string literals, const tables) */
+    /* Read-only constants, string literals */
     .rodata ALIGN(16) : {
         *(.rodata)
         *(.rodata.*)
+        *(.rdata)
+        *(.rdata.*)
     }
 
-    /* Initialised data */
+    /* Initialized data */
     .data ALIGN(16) : {
         *(.data)
+        *(.data.*)
     }
 
-    /* Zero-initialised data */
+    /* Zero-initialized data */
     .bss ALIGN(16) : {
+        _bss_start = .;
         *(COMMON)
         *(.bss)
         *(.bss.*)
+        _bss_end = .;
+    }
+
+    _kernel_end = .;
+
+    /* Discard unused or platform-specific metadata sections */
+    /DISCARD/ : {
+        *(.pdata)
+        *(.xdata)
+        *(.idata*)
+        *(.comment)
+        *(.note*)
     }
 }
