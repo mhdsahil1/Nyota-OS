@@ -14,7 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-1%3A%20Kernel%20Foundation-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-2%3A%20Interrupts%20%26%20Input-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.2.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -22,13 +23,17 @@
 </p>
 
 <p align="center">
-  <a href="#-phase-1-overview">Phase 1 Overview</a>
+  <a href="#-phase-2-overview">Phase 2 Overview</a>
   ·
-  <a href="#-architecture--boot-flow">Architecture</a>
+  <a href="#-interrupt-architecture">Interrupt Architecture</a>
+  ·
+  <a href="#-architecture--boot-flow">Boot Flow</a>
   ·
   <a href="#-project-structure">Project Structure</a>
   ·
   <a href="#-getting-started">Getting Started</a>
+  ·
+  <a href="#-how-to-use--interact-with-nyota-os">How to Use</a>
   ·
   <a href="#-debugging-with-gdb">Debugging</a>
   ·
@@ -47,24 +52,57 @@
 
 ---
 
-# 🚀 Phase 1 Overview
+# 🚀 Phase 2 Overview
 
-**Current Status:** **Phase 1 — Kernel Foundation & Boot Architecture** (Completed)
+**Current Status:** **Phase 2 — Interrupts, Exceptions, Timer & Keyboard** (Completed)
 
-Phase 1 establishes a clean, bootable, maintainable 64-bit kernel foundation for Nyota OS:
+Phase 2 transforms Nyota OS from a static kernel that boots and halts into a reactive, event-driven operating system responding dynamically to hardware events, CPU exceptions, clock ticks, and keyboard strokes:
 
-- Boots from a raw disk image via standard BIOS in QEMU.
-- Executes two-stage bootloader:
-  - **Stage 1 (MBR)**: Initializes segments, validates BIOS boot drive, loads Stage 2 from disk.
-  - **Stage 2**: Enables A20 gate, verifies CPUID & 64-bit Long Mode support, sets up 4-level PML4 paging (identity-mapping 0–16 MB using 2 MB huge pages), builds 64-bit GDT, enables PAE/LME/PG, transitions to 64-bit Long Mode, relocates the kernel to `0x100000` (1 MB mark), and transfers control.
-- Executes 64-bit C kernel at entry point `0x100000` with an aligned stack.
-- Configures 64-bit kernel Global Descriptor Table (GDT).
-- Inspects CPU vendor string and hardware features using CPUID (SSE, SSE2, SSE3, APIC, PAE, Long Mode, NX).
-- Provides VGA 80x25 text-mode console with hardware cursor, color support, and automatic scrolling.
-- Mirrors console output to COM1 serial port (`0x3F8`) for instant host terminal diagnostics.
-- Implements kernel logging interface (`kprint`, `kprintln`, `klog`, `kinfo`, `kwarn`, `kerror`) and safe kernel panic system (`kernel_panic`).
-- Enters safe idle loop (`hlt`).
-- Reproducible cross-platform build system generating `build/nyota.img` in one command.
+- **Interrupt Descriptor Table (IDT)**: Complete 256-entry 64-bit IDT loaded via `lidt`.
+- **CPU Exception Handlers**: Robust handlers for all 32 x86_64 exception vectors (Divide Error, Breakpoint, Invalid Opcode, Double Fault, GPF, Page Fault, etc.).
+- **Diagnostic Kernel Panic**: Rich crash report displaying exception name, vector, error code, faulting address (`CR2`), `RIP`, `RFLAGS`, stack pointer, and full register dump across both VGA text mode and COM1 serial console.
+- **Assembly Interrupt Layer**: Uniform ISR stubs normalizing stack frames for exceptions with and without CPU error codes, preserving all 15 general-purpose registers, maintaining 16-byte System V AMD64 ABI alignment, and returning cleanly via `iretq`.
+- **Centralized Interrupt Dispatcher**: Routes traps and IRQs to registered C callbacks with automatic End Of Interrupt (EOI) signaling.
+- **8259 PIC Driver**: Remaps hardware IRQs 0–15 to vectors 32–47 (`0x20`–`0x2F`), manages master/slave cascade wiring, and dynamic IRQ masking.
+- **Programmable Interval Timer (PIT 8254)**: Configured at 100 Hz (10 ms per tick), driving monotonic uptime counters and interrupt-driven `timer_sleep()`.
+- **PS/2 Keyboard Driver**: Scancode Set 1 decoder handling make/break codes, modifier tracking (Shift, Ctrl, Alt, Caps Lock), navigation keys, and an asynchronous lock-free circular event buffer.
+- **Interactive Kernel Console**: Command-line shell prompt (`nyota> `) supporting character input, backspace, enter, and built-in commands (`uptime`, `cpu`, `clear`, `help`).
+- **Dual-Input Capability**: Simultaneously receives input from the graphical PS/2 keyboard and COM1 serial port (`-serial stdio`).
+
+---
+
+# ⚡ Interrupt Architecture
+
+```text
+                        CPU Hardware
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+        CPU Exceptions                Hardware IRQs
+        (Vectors 0..31)              (IRQs 0..15)
+              │                             │
+              ▼                             ▼
+       Exception Handler               8259 PIC
+      (Panic & Diagnostics)          (Remap 32..47)
+                                            │
+                                            ▼
+                                   Central IRQ Dispatcher
+                                     │               │
+                                     ▼               ▼
+                               PIT Timer ISR   PS/2 Keyboard ISR
+                               (Vector 32)       (Vector 33)
+                                     │               │
+                                     ▼               ▼
+                                Monotonic      Scancode Decoder
+                               Tick Counter          │
+                                     │               ▼
+                                     │         Key Event Buffer
+                                     │               │
+                                     └───────┬───────┘
+                                             ▼
+                                   Interactive Console
+                                        (nyota> )
+```
 
 ---
 
@@ -121,9 +159,15 @@ nyota-os/
 ├── kernel/
 │   ├── kernel.c             # C kernel entry (kernel_main) and logging
 │   ├── kernel_entry.asm     # 64-bit entry point, stack setup, calls kernel_main
+│   ├── console.c            # Interactive kernel console and line editing
 │   │
 │   ├── arch/
 │   │   └── x86_64/
+│   │       ├── idt.c        # 256-entry 64-bit IDT initialization & gate setup
+│   │       ├── interrupts.asm # 256 ISR stubs, stack frame setup, iretq
+│   │       ├── dispatcher.c # Centralized interrupt dispatcher & handler table
+│   │       ├── exceptions.c # CPU exception handlers (0..31) & diagnostic panic
+│   │       ├── pic.c        # 8259 PIC initialization, IRQ remapping, EOI
 │   │       └── io.h         # Architecture port I/O wrappers
 │   │
 │   ├── cpu/
@@ -136,17 +180,26 @@ nyota-os/
 │
 ├── include/
 │   ├── types.h              # Freestanding fixed-width types (uint64_t, bool, etc.)
-│   ├── kernel.h             # Logging macros (kinfo, kwarn, kerror) and kernel_panic
+│   ├── kernel.h             # Logging macros, version info, kernel_panic
 │   ├── cpu.h                # CPU capabilities and CPUID interface
 │   ├── gdt.h                # GDT constants and initialization prototype
+│   ├── idt.h                # IDT descriptors, attributes, and gate APIs
+│   ├── interrupts.h         # Interrupt frame structure, IRQ mappings, dispatcher
+│   ├── exceptions.h         # Exception vectors, panic_with_frame prototypes
+│   ├── pic.h                # 8259 PIC port definitions and commands
+│   ├── timer.h              # PIT 8254 timer, uptime, and sleep interface
+│   ├── keyboard.h           # Key event structure, scancodes, ring buffer
+│   ├── console.h            # Interactive kernel console interface
 │   ├── vga.h                # VGA colors, cursor positioning, and print APIs
-│   ├── serial.h             # COM1 serial driver interface
+│   ├── serial.h             # COM1 serial driver interface (tx/rx)
 │   ├── io.h                 # Port I/O (inb, outb, inw, outw, inl, outl)
 │   └── memory.h             # Memory and string function declarations
 │
 ├── drivers/
 │   ├── vga.c                # 80x25 text-mode driver at 0xB8000 with scrolling
-│   └── serial.c             # 16550 UART serial driver (115200 8N1)
+│   ├── serial.c             # 16550 UART serial driver (115200 8N1 tx/rx)
+│   ├── timer.c              # 8254 PIT driver (100 Hz, uptime tracking, sleep)
+│   └── keyboard.c           # PS/2 keyboard driver, scancode decoder, ring buffer
 │
 ├── tools/
 │   └── mkimage.c            # Cross-platform disk image builder (creates nyota.img)
@@ -249,16 +302,29 @@ make run-serial
               NYOTA OS                  
 ========================================
 
-[INFO]  Bootloader initialized
-[INFO]  CPU: x86_64
-[INFO]  GDT initialized
-[INFO]  Paging enabled
-[INFO]  Kernel loaded
-[INFO]  Kernel initialization complete
+Kernel       : v0.2.0
+Architecture : x86_64
 
+[ OK ] GDT
+[ OK ] IDT
+[ OK ] Exceptions
+[ OK ] PIC
+[ OK ] Timer
+[ OK ] Keyboard
+[ OK ] Interrupts
+
+Uptime: 00:00:00
+
+nyota> hello nyota
+hello nyota
+
+nyota> uptime
+Uptime: 00:00:15
+
+nyota> cpu
 CPU Information
 -------------------------
-Vendor   : AuthenticAMD (or GenuineIntel)
+Vendor   : AuthenticAMD
 Mode     : x86_64
 Features :
   SSE
@@ -269,19 +335,152 @@ Features :
   Long Mode (x86_64)
   NX (No-Execute)
 
-Bootloader       : OK
-CPU              : x86_64
-Long Mode        : OK
-Paging           : OK
-GDT              : OK
-Kernel           : OK
+nyota> 
+```
 
-----------------------------------------
+---
 
-Nyota Kernel v0.1
-System initialized successfully.
+# 🎮 How to Use & Interact with Nyota OS
 
-nyota kernel is running...
+### 1. Launching Nyota OS
+
+To build and start Nyota OS in the QEMU emulator:
+
+```bash
+make run
+```
+
+When you execute `make run`, Nyota OS boots using a **dual-output architecture**:
+
+1. **VGA Graphics Window**: A QEMU window opens displaying the 80x25 text-mode console (`0xB8000`) with colored status badges, hardware CPUID feature logs, and the system checklist.
+2. **Serial Terminal Stream**: The 16550 UART COM1 serial port (`0x3F8`) mirrors all kernel diagnostics directly to your active host terminal in real time.
+
+---
+
+### 2. Interactive Console Commands (Phase 2)
+
+Nyota OS v0.2.0 features a functional interactive kernel console. Both your graphical keyboard (in the QEMU window) and host terminal stdin (via serial) are active:
+
+| Command | Action |
+| :--- | :--- |
+| `any text` | Press <kbd>Enter</kbd> to echo back input text |
+| `uptime` | Display live system uptime calculated from 100 Hz PIT timer ticks |
+| `cpu` | Interrogate CPUID hardware vendor and architecture capabilities |
+| `clear` | Clear the VGA screen and reset hardware cursor to (0,0) |
+| `help` | List available built-in commands |
+
+Line editing supports:
+- Printable ASCII characters (`A-Z`, `a-z`, `0-9`, symbols, space)
+- <kbd>Shift</kbd> and <kbd>Caps Lock</kbd> modifiers
+- <kbd>Backspace</kbd> with character erase and hardware cursor repositioning
+- <kbd>Enter</kbd> to execute and produce new prompt `nyota> `
+
+---
+
+### 3. How to Control & Exit QEMU
+
+| Action | Shortcut / Method | Description |
+| :--- | :--- | :--- |
+| **Exit QEMU (Window)** | Click the window **Close (X)** button | Shuts down emulator immediately |
+| **Exit QEMU (Terminal)** | Press <kbd>Ctrl</kbd> + <kbd>C</kbd> in your terminal | Stops QEMU process cleanly |
+| **Release Mouse Cursor** | Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd> (or <kbd>Ctrl</kbd> + <kbd>Alt</kbd>) | Un-grabs mouse if cursor is locked in QEMU |
+| **Open QEMU Monitor** | Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>2</kbd> inside QEMU | Opens interactive hardware monitor |
+| **Return to OS Display** | Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>1</kbd> | Returns to the Nyota VGA console |
+
+---
+
+### 4. Interactive Live Inspection via QEMU Monitor
+
+Even before the Phase 2 keyboard shell, you can interact directly with the running hardware state using QEMU's built-in **Monitor**:
+
+1. Inside the QEMU window, press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>2</kbd> to open the `(qemu)` monitor prompt.
+2. Run any of the following live hardware inspection commands:
+
+- **Inspect 64-bit CPU registers:**
+  ```text
+  (qemu) info registers
+  ```
+  *Dumps live registers (`RAX`, `RBX`, `RIP`, `RSP`, `CR0`, `CR3`, `CR4`, `EFER`). Verifies that 64-bit Long Mode is active (`CR0.PG=1`, `CR4.PAE=1`, `EFER.LME=1`).*
+
+- **Inspect physical memory at kernel entry:**
+  ```text
+  (qemu) xp /16x 0x100000
+  ```
+  *Dumps physical memory at `0x100000` (1 MB mark), showing the raw machine code of the loaded Nyota kernel.*
+
+- **Inspect VGA text video memory:**
+  ```text
+  (qemu) xp /24cx 0xB8000
+  ```
+  *Dumps raw VGA buffer memory displaying characters and color attributes currently rendered on screen.*
+
+- **Inspect active memory mappings:**
+  ```text
+  (qemu) info mem
+  ```
+  *Displays the active virtual memory page tables (confirming PML4 2MB identity-mapped pages).*
+
+- **Quit emulator:**
+  ```text
+  (qemu) quit
+  ```
+
+3. Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>1</kbd> to switch back to the Nyota OS screen.
+
+---
+
+### 5. Running in Different Modes
+
+Depending on your workflow or environment:
+
+#### 🖥️ Standard Interactive Mode (VGA Window + Terminal Serial)
+```bash
+make run
+```
+*Best for visual inspection and development.*
+
+#### ⚡ Headless Serial Mode (Terminal Only)
+```bash
+make run-serial
+```
+*Best for CI/CD pipelines, remote SSH sessions, or fast terminal-only checks without opening a GUI window. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to exit.*
+
+#### 🐞 Source-Level GDB Debugging Mode
+```bash
+make run-debug
+```
+*Starts QEMU paused at the boot vector and opens GDB stub on port `1234`. Connect with `gdb build/kernel.elf` in another terminal (see [Debugging with GDB](#-debugging-with-gdb)).*
+
+---
+
+### 6. Hands-On: Modifying and Testing Your Own Kernel Code
+
+You can easily experiment with Nyota OS by adding your own logic to the kernel:
+
+1. Open [`kernel/kernel.c`](file:///c:/Users/HP/Projects/Nyota%20OS/kernel/kernel.c).
+2. Inside `kernel_main()`, add custom log messages or change VGA text colors:
+
+```c
+/* Custom logging test */
+kinfo("My custom feature initialized successfully!");
+kwarn("Warning: low memory simulation test.");
+kerror("Error test message.");
+
+/* Custom colored text */
+vga_set_color(VGA_LIGHT_MAGENTA, VGA_BLACK);
+vga_println("Hello from Nyota OS kernel hack!");
+```
+
+3. To test the kernel panic handler, add:
+
+```c
+kernel_panic("Kernel panic test triggered intentionally.");
+```
+
+4. Recompile and run in one command:
+
+```bash
+make rebuild && make run
 ```
 
 ---
@@ -333,15 +532,14 @@ Inside GDB:
 
 ---
 
-# ⚠️ Current Limitations (Phase 1)
+# ⚠️ Current Limitations (Phase 2)
 
-Phase 1 deliberately focuses exclusively on establishing a rock-solid boot architecture and 64-bit kernel foundation. The following are intentionally deferred to future phases:
+Phase 2 successfully implements the complete interrupt pipeline, exception handling, PIT timer, PS/2 keyboard driver, and interactive console. The following subsystems belong to subsequent phases:
 
-- Hardware interrupts are disabled (`cli`).
-- Interrupt Descriptor Table (IDT) and exception handling are deferred to Phase 2.
-- Interactive keyboard input driver is deferred to Phase 2.
-- Dynamic physical and virtual memory allocation (heap / malloc) is deferred to Phase 3.
-- Multitasking, scheduler, filesystems, and userland applications belong to later phases.
+- Dynamic memory management (Physical frame allocator, virtual memory manager, heap `kmalloc`/`kfree`) is deferred to Phase 3.
+- Multitasking, Task State Segment (TSS), context switching, and scheduler are deferred to Phase 4.
+- Storage controller drivers (IDE/ATA) and Virtual File System (VFS) are deferred to Phase 5.
+- Ring 3 User Space transition, system calls (`syscall`/`sysret`), and userland binaries are deferred to Phase 6.
 
 ---
 
@@ -361,15 +559,18 @@ Phase 1: Kernel Foundation & Boot Architecture  ◄ [COMPLETED]
    ├── Kernel Logging & Panic System
    └── Automated Bootable Image Generation
 
-Phase 2: Interrupts & Input Architecture         ◄ [NEXT]
-   ├── Interrupt Descriptor Table (IDT)
-   ├── CPU Exception Handlers (Page Fault, GPF, etc.)
-   ├── 8259 PIC / APIC Configuration
-   ├── Programmable Interval Timer (PIT)
-   ├── PS/2 Keyboard Controller Driver
-   └── Interactive Kernel Shell
+Phase 2: Interrupts & Input Architecture         ◄ [COMPLETED]
+   ├── Interrupt Descriptor Table (IDT, 256 gates)
+   ├── CPU Exception Handlers (0..31) & Panic Dump
+   ├── Assembly ISR Stubs & Uniform Stack Frames
+   ├── Centralized Interrupt Dispatcher
+   ├── 8259 PIC Remapping (Vectors 32..47)
+   ├── PIT Timer (100 Hz, Uptime, timer_sleep)
+   ├── PS/2 Keyboard Driver & Scancode Set 1 Decoder
+   ├── Lock-Free Keyboard Event Circular Buffer
+   └── Interactive Kernel Console (nyota> shell)
 
-Phase 3: Memory Management
+Phase 3: Memory Management                       ◄ [NEXT]
    ├── Physical Memory Allocator (Bitmap / Buddy)
    ├── Virtual Memory Manager & Dynamic Paging
    └── Kernel Heap (kmalloc / kfree)

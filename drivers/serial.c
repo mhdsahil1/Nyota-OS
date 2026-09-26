@@ -68,3 +68,17 @@ void serial_write(const char *str) {
         str++;
     }
 }
+
+bool serial_has_data(void) {
+    if (!serial_initialized) {
+        serial_init();
+    }
+    return (inb(COM1_PORT + UART_LSR) & 0x01) != 0;
+}
+
+char serial_getchar(void) {
+    while (!serial_has_data()) {
+        __asm__ volatile ("hlt");
+    }
+    return (char)inb(COM1_PORT + UART_DATA);
+}

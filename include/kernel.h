@@ -4,7 +4,7 @@
 #include "types.h"
 
 #define NYOTA_OS_NAME       "Nyota OS"
-#define NYOTA_OS_VERSION    "0.1.0-phase1"
+#define NYOTA_OS_VERSION    "0.2.0"
 #define NYOTA_ARCH          "x86_64"
 
 /* Basic console text output */

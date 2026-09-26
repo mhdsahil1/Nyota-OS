@@ -16,9 +16,15 @@ typedef __SIZE_TYPE__      size_t;
 typedef __INTPTR_TYPE__    intptr_t;
 typedef __UINTPTR_TYPE__   uintptr_t;
 
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+/* C23 has bool, true, false as built-in keywords */
+#else
+#ifndef bool
 typedef _Bool              bool;
 #define true               1
 #define false              0
+#endif
+#endif
 
 #ifndef NULL
 #define NULL ((void *)0)

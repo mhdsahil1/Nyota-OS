@@ -1,0 +1,143 @@
+/* =============================================================================
+ * Nyota OS — CPU Exception Handlers & Diagnostic Kernel Panic
+ * Handles x86_64 CPU exceptions (vectors 0..31)
+ * =========================================================================== */
+
+#include "exceptions.h"
+#include "interrupts.h"
+#include "kernel.h"
+#include "vga.h"
+#include "serial.h"
+
+static const char * const exception_names[32] = {
+    "Divide Error (#DE)",
+    "Debug Exception (#DB)",
+    "Non-Maskable Interrupt (NMI)",
+    "Breakpoint (#BP)",
+    "Overflow (#OF)",
+    "BOUND Range Exceeded (#BR)",
+    "Invalid Opcode (#UD)",
+    "Device Not Available (#NM)",
+    "Double Fault (#DF)",
+    "Coprocessor Segment Overrun",
+    "Invalid TSS (#TS)",
+    "Segment Not Present (#NP)",
+    "Stack-Segment Fault (#SS)",
+    "General Protection Fault (#GP)",
+    "Page Fault (#PF)",
+    "Reserved Vector 15",
+    "x87 FPU Floating-Point Error (#MF)",
+    "Alignment Check (#AC)",
+    "Machine Check (#MC)",
+    "SIMD Floating-Point Exception (#XM)",
+    "Virtualization Exception (#VE)",
+    "Control Protection Exception (#CP)",
+    "Reserved Vector 22",
+    "Reserved Vector 23",
+    "Reserved Vector 24",
+    "Reserved Vector 25",
+    "Reserved Vector 26",
+    "Reserved Vector 27",
+    "Hypervisor Injection Exception (#HV)",
+    "VMM Communication Exception (#VC)",
+    "Security Exception (#SX)",
+    "Reserved Vector 31"
+};
+
+void panic_with_frame(const char *title, const interrupt_frame_t *frame) {
+    __asm__ volatile ("cli");
+
+    vga_set_color(VGA_WHITE, VGA_RED);
+    vga_println("");
+    vga_println("========================================");
+    vga_println("          NYOTA KERNEL PANIC            ");
+    vga_println("========================================");
+
+    if (title) {
+        vga_print("Condition : ");
+        vga_println(title);
+    }
+
+    if (frame) {
+        const char *name = (frame->vector < 32) ? exception_names[frame->vector] : "Hardware/Software Interrupt";
+        vga_print("Exception : ");
+        vga_println(name);
+
+        vga_print("Vector    : ");
+        vga_print_dec(frame->vector);
+        vga_println("");
+
+        vga_print("Error Code: ");
+        vga_print_hex(frame->error_code);
+        vga_println("");
+
+        if (frame->vector == 14) {
+            uint64_t cr2;
+            __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+            vga_print("CR2 (Addr): ");
+            vga_print_hex(cr2);
+            vga_println("");
+        }
+
+        vga_print("RIP       : ");
+        vga_print_hex(frame->rip);
+        vga_print("  CS: ");
+        vga_print_hex(frame->cs);
+        vga_println("");
+
+        vga_print("RFLAGS    : ");
+        vga_print_hex(frame->rflags);
+        vga_println("");
+
+        vga_print("RSP       : ");
+        vga_print_hex(frame->rsp);
+        vga_print("  SS: ");
+        vga_print_hex(frame->ss);
+        vga_println("");
+
+        vga_println("----------------------------------------");
+        vga_print("RAX: "); vga_print_hex(frame->rax);
+        vga_print(" RBX: "); vga_print_hex(frame->rbx);
+        vga_println("");
+        vga_print("RCX: "); vga_print_hex(frame->rcx);
+        vga_print(" RDX: "); vga_print_hex(frame->rdx);
+        vga_println("");
+        vga_print("RSI: "); vga_print_hex(frame->rsi);
+        vga_print(" RDI: "); vga_print_hex(frame->rdi);
+        vga_println("");
+        vga_print("RBP: "); vga_print_hex(frame->rbp);
+        vga_println("");
+    }
+
+    vga_println("========================================");
+    vga_println("System halted.");
+
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+void exception_handler(interrupt_frame_t *frame) {
+    if (!frame) return;
+
+    /* Vector 3: Breakpoint (INT3) — non-fatal debug trap */
+    if (frame->vector == 3) {
+        vga_set_color(VGA_YELLOW, VGA_BLACK);
+        vga_print("[DEBUG] Trapped Breakpoint (#BP) at RIP: ");
+        vga_print_hex(frame->rip);
+        vga_println("");
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        return;
+    }
+
+    /* All other CPU exceptions are fatal in early kernel phase */
+    const char *name = (frame->vector < 32) ? exception_names[frame->vector] : "CPU Exception";
+    panic_with_frame(name, frame);
+}
+
+void exceptions_init(void) {
+    /* Register exception handlers for all 32 CPU exceptions */
+    for (uint8_t i = 0; i < 32; i++) {
+        interrupt_register_handler(i, exception_handler);
+    }
+}

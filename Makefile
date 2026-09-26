@@ -9,8 +9,8 @@ ifeq ($(OS),Windows_NT)
     EXE_EXT   := .exe
     ASM_FMT   := win64
     LD_FLAGS  := -m i386pep --image-base 0x0 --section-alignment 0x10 --file-alignment 0x10
-    CLEAN_CMD := if exist $(BUILD_DIR) rd /s /q $(BUILD_DIR)
-    MKDIR_CMD := if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+    CLEAN_CMD := cmd /c if exist $(BUILD_DIR) rd /s /q $(BUILD_DIR)
+    MKDIR_CMD := cmd /c if not exist $(BUILD_DIR) md $(BUILD_DIR)
 else
     HOST_OS   := linux
     EXE_EXT   :=
@@ -42,6 +42,7 @@ CFLAGS := \
     -fno-asynchronous-unwind-tables\
     -fno-unwind-tables             \
     -mno-red-zone                  \
+    -mgeneral-regs-only            \
     -Wall                          \
     -Wextra                        \
     -Iinclude                      \
@@ -60,7 +61,8 @@ MKIMAGE     := $(BUILD_DIR)/mkimage$(EXE_EXT)
 # ── Kernel Object Files ───────────────────────────────────────────────────────
 KERNEL_ASM_OBJS := \
     $(BUILD_DIR)/kernel_entry.o     \
-    $(BUILD_DIR)/gdt_flush.o
+    $(BUILD_DIR)/gdt_flush.o        \
+    $(BUILD_DIR)/interrupts.o
 
 KERNEL_C_OBJS := \
     $(BUILD_DIR)/kernel.o           \
@@ -68,7 +70,14 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/cpu.o              \
     $(BUILD_DIR)/gdt.o              \
     $(BUILD_DIR)/vga.o              \
-    $(BUILD_DIR)/serial.o
+    $(BUILD_DIR)/serial.o           \
+    $(BUILD_DIR)/idt.o              \
+    $(BUILD_DIR)/dispatcher.o       \
+    $(BUILD_DIR)/exceptions.o       \
+    $(BUILD_DIR)/pic.o              \
+    $(BUILD_DIR)/timer.o            \
+    $(BUILD_DIR)/keyboard.o         \
+    $(BUILD_DIR)/console.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -122,6 +131,10 @@ $(BUILD_DIR)/gdt_flush.o: kernel/cpu/gdt_flush.asm | $(BUILD_DIR)
 	@echo [BUILD] kernel/cpu/gdt_flush.asm
 	@$(NASM) -f $(ASM_FMT) $< -o $@
 
+$(BUILD_DIR)/interrupts.o: kernel/arch/x86_64/interrupts.asm | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/interrupts.asm
+	@$(NASM) -f $(ASM_FMT) $< -o $@
+
 # ── C Compilation ─────────────────────────────────────────────────────────────
 $(BUILD_DIR)/kernel.o: kernel/kernel.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/kernel.c
@@ -145,6 +158,34 @@ $(BUILD_DIR)/vga.o: drivers/vga.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/serial.o: drivers/serial.c | $(BUILD_DIR)
 	@echo [BUILD] drivers/serial.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/idt.o: kernel/arch/x86_64/idt.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/idt.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dispatcher.o: kernel/arch/x86_64/dispatcher.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/dispatcher.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/exceptions.o: kernel/arch/x86_64/exceptions.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/exceptions.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pic.o: kernel/arch/x86_64/pic.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/pic.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/timer.o: drivers/timer.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/timer.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/keyboard.o: drivers/keyboard.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/keyboard.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/console.o: kernel/console.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/console.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────
