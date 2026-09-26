@@ -132,7 +132,7 @@ void usertest_trigger_kernel_write(void) {
     vga_println("Creating user process attempting hostile write to 0x100000...");
     serial_write("Creating user process attempting hostile write to 0x100000...\n");
 
-    process_t *bad_proc = process_create(USER_CODE_BASE, (const void *)malicious_user_blob, 64);
+    process_t *bad_proc = process_create("bad_proc", USER_CODE_BASE, (const void *)malicious_user_blob, 64);
     if (!bad_proc) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("Failed to create malicious process");

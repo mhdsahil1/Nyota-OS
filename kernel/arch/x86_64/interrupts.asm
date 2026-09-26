@@ -96,9 +96,31 @@ isr_common_stub:
     mov  rdi, rsp
     mov  rcx, rsp
 
-    ; 4. Call C interrupt dispatcher
+    ; 4. Call C interrupt dispatcher (returns active frame pointer in RAX)
     call interrupt_dispatch
 
+    ; Switch stack pointer to returned interrupt_frame_t (enables task context switches)
+    mov  rsp, rax
+
+    ; Check if returning to Ring 3 (CS at [rsp + 144] has RPL = 3)
+    test byte [rsp + 144], 3
+    jz   .return_kernel
+
+    ; Set user data segment selectors (0x1B)
+    mov  ax, 0x1B
+    mov  ds, ax
+    mov  es, ax
+    mov  fs, ax
+    mov  gs, ax
+    jmp  .restore_regs
+
+.return_kernel:
+    ; Set kernel data segment selectors (0x10)
+    mov  ax, 0x10
+    mov  ds, ax
+    mov  es, ax
+
+.restore_regs:
     ; 5. Restore general-purpose registers
     pop  r15
     pop  r14
@@ -119,7 +141,7 @@ isr_common_stub:
     ; 6. Clean up vector number (8 bytes) and error code (8 bytes)
     add  rsp, 16
 
-    ; 7. Return from interrupt
+    ; 7. Return from interrupt (pops RIP, CS, RFLAGS, RSP, SS)
     iretq
 
 ; ── 256-entry Table of ISR Function Pointers ─────────────────────────────────

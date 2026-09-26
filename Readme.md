@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-4%3A%20Processes%2C%20User%20Mode%20%26%20Syscalls-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.4.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-5%3A%20Multitasking%2C%20Scheduler%20%26%20Process%20Management-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.5.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-5-overview-multitasking-scheduler--process-management">Phase 5 Overview</a>
+  ·
   <a href="#-phase-4-overview-processes-user-mode--system-calls">Phase 4 Overview</a>
   ·
   <a href="#-phase-3-overview">Phase 3 Overview</a>
@@ -55,6 +57,93 @@
 > Every subsystem added to Nyota should have a clear interface, a testable implementation, and a reason to exist.
 > The goal isn't to make Nyota look like an operating system.
 > **The goal is to make Nyota actually behave like one.**
+
+---
+
+# 🔄 Phase 5 Overview: Multitasking, Scheduler & Process Management
+
+**Current Status:** **Phase 5 — Multitasking, Scheduler & Process Management** (Completed)
+
+Phase 5 transforms Nyota OS from a single-tasking operating system into a **fully preemptive, multi-process operating system** capable of managing multiple independent user processes, safely switching between isolated virtual address spaces, and preempting CPU-bound code using hardware timer interrupts:
+
+```text
+                    NYOTA SCHEDULER ARCHITECTURE
+                                 │
+                             Scheduler
+                                 │
+                   ┌─────────────┼─────────────┐
+                   ▼             ▼             ▼
+                 PID 1         PID 2         PID 3
+                (prog_a)      (prog_b)      (prog_c)
+                   │             │             │
+                   ▼             ▼             ▼
+                 CR3 A         CR3 B         CR3 C
+             (Isolated VM) (Isolated VM) (Isolated VM)
+                   │             │             │
+                   ▼             ▼             ▼
+                 User A        User B        User C
+              (Yield Loop)  (Pure Compute)  (100ms Sleep)
+```
+
+---
+
+### Key Subsystems Delivered in Phase 5:
+
+1. **Preemptive Round-Robin CPU Scheduler**:
+   - Driven by the 8254 Programmable Interval Timer (PIT) configured at **100 Hz** (10 ms resolution).
+   - Time-slice quantum set to **5 ticks (50 ms)** per process.
+   - Transparent preemption: compute-heavy user programs that never call `yield()` are automatically preempted and rescheduled, preventing starvation.
+
+2. **Hardware-Enforced Context Switching via Kernel Stack Frames**:
+   - Because x86_64 Long Mode interrupts push `SS`, `RSP`, `RFLAGS`, `CS`, and `RIP` automatically, and `isr_common_stub` preserves all 15 general-purpose registers, the process execution state is fully encapsulated by an `interrupt_frame_t` on the process's dedicated kernel stack.
+   - Low-level stack switching: `interrupt_dispatch()` returns the active frame pointer in `RAX`. In `kernel/arch/x86_64/interrupts.asm`, `mov rsp, rax` atomically pivots the stack pointer to the scheduled process frame.
+   - Data segment selectors are checked against `CS.RPL`: if returning to Ring 3 (`CS & 3 == 3`), data segments (`DS`, `ES`, `FS`, `GS`) are loaded with `0x1B` (DPL=3 user data); otherwise loaded with `0x10` (kernel data).
+   - `TSS.RSP0` is updated to `next->kernel_stack_top` so subsequent interrupts from Ring 3 land on the correct kernel stack.
+   - Address space transition: `CR3` is reloaded with `next->cr3`, switching the active 4-level PML4 paging table and flushing the TLB.
+
+3. **Process State Machine & Double-Queue Architecture**:
+   - **Process States**: `PROCESS_NEW`, `PROCESS_READY`, `PROCESS_RUNNING`, `PROCESS_SLEEPING`, `PROCESS_TERMINATED`, `PROCESS_IDLE`.
+   - **Ready Queue**: Circular doubly-linked list (`ready_head`, `ready_tail`) providing $O(1)$ dispatch and enqueue. Terminated or sleeping processes are removed, preventing duplicate insertion.
+   - **Sleep Queue**: Linked list of sleeping processes evaluated every 10 ms timer tick. When `timer_ticks() >= p->wakeup_tick`, the process transitions to `PROCESS_READY` and re-enters the ready queue.
+   - **Kernel Idle Process (PID 0)**: Created with a dedicated 4 KiB kernel stack and runs `sti; hlt` in a power-saving halt loop when no user processes are runnable.
+
+```text
+                    PROCESS LIFECYCLE
+                      ┌─────────────┐
+                      │     NEW     │
+                      └──────┬──────┘
+                             │
+                             ▼
+                      ┌─────────────┐
+                      │    READY    │◄────────┐
+                      └──────┬──────┘         │
+                             │ schedule       │ wake
+                             ▼                │
+                      ┌─────────────┐         │
+                      │   RUNNING   │         │
+                      └───┬─────┬───┘         │
+                          │     │             │
+                   yield  │     │ sleep       │
+               preemption │     ▼             │
+                          │  SLEEPING ────────┘
+                          │
+                    exit  ▼
+                      TERMINATED
+```
+
+4. **Expanded System Call Architecture**:
+   - `SYS_YIELD` (Vector 3): Allows user processes to voluntarily release their remaining time slice to other runnable tasks.
+   - `SYS_SLEEP` (Vector 4): Places the calling process into `PROCESS_SLEEPING` state for a requested duration in milliseconds, removing it from the ready queue until the target timer tick.
+   - Syscall wrapper library providing clean C functions: `sys_write()`, `sys_exit()`, `sys_getpid()`, `sys_yield()`, `sys_sleep()`.
+
+5. **Multi-Program Validation Suite**:
+   - **Program A (`prog_a`, PID 1)**: Cooperative counter demonstrating multiple `sys_yield()` handoffs.
+   - **Program B (`prog_b`, PID 2)**: Heavy compute loop with zero voluntary yields, demonstrating hardware timer preemption.
+   - **Program C (`prog_c`, PID 3)**: Sleep/wake demonstration calling `sys_sleep(100)` and resuming execution after 100 ms.
+   - **Rogue Process (`rogue_proc`, PID 4)**: Hostile process attempting to write to kernel memory at `0x100000`. Hardware #PF protection terminates only the offending process (`SIGSEGV -11`), leaving the kernel and all other processes completely unharmed.
+
+6. **Interactive Process Inspection (`ps` command)**:
+   - Console command `ps` displays live process states, total runtime ticks, context switch metrics, and active PID.
 
 ---
 
@@ -550,12 +639,16 @@ When you execute `make run`, Nyota OS boots using a **dual-output architecture**
 
 ---
 
-### 2. Interactive Console Commands (v0.4.0)
+### 2. Interactive Console Commands (v0.5.0)
 
 Nyota OS features a functional interactive kernel console (`nyota> ` prompt). Both your graphical keyboard (in the QEMU window) and host terminal stdin (via serial) are active:
 
 | Command | Subsystem | Action |
 | :--- | :--- | :--- |
+| `ps` | Phase 5 Process | Display active and terminated process table, states, runtime ticks, and context switches |
+| `multitask` | Phase 5 Process | Spawn three concurrent independent user processes (`prog_a`, `prog_b`, `prog_c`) |
+| `testsched` | Phase 5 Scheduler | Run Phase 5 automated validation suite (ready queue, idle fallback, syscalls, metrics) |
+| `viol_iso` | Phase 5 Security | Spawn rogue process attempting to write kernel memory, testing page fault isolation |
 | `uptime` | Phase 2 Timer | Display live system uptime calculated from 100 Hz PIT timer ticks |
 | `cpu` | Phase 1 CPUID | Interrogate CPUID hardware vendor and architecture capabilities |
 | `mem` | Phase 3 Memory | Display physical memory statistics (total/used/free frames) and heap metrics |
@@ -796,13 +889,22 @@ Phase 4: Processes, User Mode & System Calls     ◄ [COMPLETED]
    ├── Graceful User Page Fault Recovery (SIGSEGV -11)
    └── Automated User Security & Privilege Test Suite
 
-Phase 5: Preemptive Multitasking & Scheduling   ◄ [NEXT]
-   ├── Preemptive Timer-Driven Context Switching
-   ├── Round-Robin / Priority CPU Scheduler
-   ├── Process State Machine (READY, RUNNING, BLOCKED)
-   └── Sleep / Yield Primitives
+Phase 5: Preemptive Multitasking & Scheduling   ◄ [COMPLETED]
+   ├── Hardware-Driven Preemptive CPU Scheduler (100 Hz PIT)
+   ├── Round-Robin Time-Slice Preemption (50 ms Quantum)
+   ├── Process Lifecycle (NEW, READY, RUNNING, SLEEPING, TERMINATED, IDLE)
+   ├── Circular Doubly-Linked Ready Queue with O(1) Operations
+   ├── Real-Time Sleep Queue with Automatic Timer-Tick Wakeup
+   ├── Stack-Based Context Switch Engine via isr_common_stub (mov rsp, rax)
+   ├── Ring 3/Ring 0 Data Segment Selector Restoration (0x1B / 0x10)
+   ├── Dynamic Address Space (CR3) & TSS RSP0 Stack Switching
+   ├── Expanded Syscalls: SYS_YIELD (3) and SYS_SLEEP (4)
+   ├── Multi-Process Suite (prog_a yield, prog_b compute, prog_c sleeper)
+   ├── Fault Isolation & Protection (rogue process #PF containment)
+   ├── Kernel Idle Task (PID 0) with Power-Saving hlt Loop
+   └── Interactive Process Manager (ps, multitask, testsched, viol_iso)
 
-Phase 6: Filesystem & Storage
+Phase 6: Filesystem & Storage                     ◄ [NEXT]
    ├── IDE / ATA Sector I/O Driver
    └── Virtual File System (VFS) & FAT32 / TAR FS
 

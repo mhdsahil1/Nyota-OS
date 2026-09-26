@@ -27,8 +27,10 @@ void interrupt_unregister_handler(uint8_t vector) {
     handlers[vector] = default_unhandled_handler;
 }
 
-void interrupt_dispatch(interrupt_frame_t *frame) {
-    if (!frame) return;
+#include "scheduler.h"
+
+interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame) {
+    if (!frame) return NULL;
 
     uint64_t vec = frame->vector;
 
@@ -42,6 +44,13 @@ void interrupt_dispatch(interrupt_frame_t *frame) {
     if (vec >= IRQ_BASE_VECTOR && vec < (IRQ_BASE_VECTOR + IRQ_COUNT)) {
         pic_send_eoi((uint8_t)(vec - IRQ_BASE_VECTOR));
     }
+
+    /* If scheduler is running, perform scheduling & context switch if needed */
+    if (scheduler_is_active()) {
+        frame = scheduler_schedule(frame);
+    }
+
+    return frame;
 }
 
 void interrupts_init(void) {

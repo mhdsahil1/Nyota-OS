@@ -50,5 +50,6 @@ SECTIONS
         *(.idata*)
         *(.comment)
         *(.note*)
+        *(.reloc)
     }
 }

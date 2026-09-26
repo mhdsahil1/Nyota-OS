@@ -15,9 +15,15 @@
 static volatile uint64_t timer_tick_count = 0;
 static uint32_t timer_frequency = PIT_DEFAULT_HZ;
 
+#include "scheduler.h"
+
 static void timer_irq_handler(interrupt_frame_t *frame) {
     (void)frame;
     timer_tick_count++;
+
+    if (scheduler_is_active()) {
+        scheduler_on_timer_tick();
+    }
 }
 
 void timer_init(uint32_t frequency_hz) {

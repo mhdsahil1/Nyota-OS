@@ -1,5 +1,5 @@
 /* =============================================================================
- * Nyota OS — System Call Interface & ABI
+ * Nyota OS — System Call Interface & ABI (Phase 5)
  * Vector 0x80 syscalls with System V register ABI and hostile pointer validation.
  * =========================================================================== */
 
@@ -13,6 +13,8 @@
 #define SYS_WRITE           0
 #define SYS_EXIT            1
 #define SYS_GETPID          2
+#define SYS_YIELD           3
+#define SYS_SLEEP           4
 
 /* POSIX Error Codes */
 #define SYS_ERR_NONE        0
@@ -36,5 +38,7 @@ int copy_to_user(void *udest, const void *ksrc, size_t len);
 int64_t sys_write(const char *buf, size_t len);
 void sys_exit(int status) __attribute__((noreturn));
 int32_t sys_getpid(void);
+void sys_yield(void);
+int64_t sys_sleep(uint64_t ms);
 
 #endif /* NYOTA_SYSCALL_H */

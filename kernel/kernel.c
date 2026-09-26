@@ -22,6 +22,8 @@
 #include "tss.h"
 #include "syscall.h"
 #include "process.h"
+#include "scheduler.h"
+#include "schedtest.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -192,14 +194,19 @@ void kernel_main(void) {
     vga_println("Syscalls");
     vga_println("");
 
-    /* 12. Process Subsystem & Initial User Process */
+    /* 12. Process Subsystem & Preemptive Scheduler */
     process_system_init();
+    scheduler_init();
 
-    process_t *init_proc = process_spawn_init();
-    if (init_proc) {
-        process_run(init_proc);
-    }
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Scheduler");
+    vga_println("");
 
-    /* Fallback in case user process did not launch */
+    /* 13. Spawn 3 Independent User Processes for Multitasking */
+    schedtest_spawn_triplet();
+
+    /* 14. Interactive Kernel Console Shell */
     console_run();
 }

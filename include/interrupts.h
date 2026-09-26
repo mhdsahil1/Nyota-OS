@@ -67,7 +67,7 @@ typedef void (*interrupt_handler_t)(interrupt_frame_t *frame);
 void interrupts_init(void);
 void interrupt_register_handler(uint8_t vector, interrupt_handler_t handler);
 void interrupt_unregister_handler(uint8_t vector);
-void interrupt_dispatch(interrupt_frame_t *frame);
+interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame);
 
 /* Enable / Disable interrupts */
 static inline void interrupts_enable(void) {

@@ -121,6 +121,18 @@ static int64_t sys_handle_getpid(void) {
     return 0;
 }
 
+#include "scheduler.h"
+
+static int64_t sys_handle_yield(void) {
+    scheduler_yield();
+    return 0;
+}
+
+static int64_t sys_handle_sleep(uint64_t ms) {
+    scheduler_sleep(ms);
+    return 0;
+}
+
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
@@ -135,6 +147,12 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
 
         case SYS_GETPID:
             return sys_handle_getpid();
+
+        case SYS_YIELD:
+            return sys_handle_yield();
+
+        case SYS_SLEEP:
+            return sys_handle_sleep(a1);
 
         default:
             return SYS_ERR_ENOSYS;
@@ -220,4 +238,28 @@ void sys_exit(int status) {
     while (1) {
         __asm__ volatile ("hlt");
     }
+}
+
+void sys_yield(void) {
+    __asm__ volatile (
+        "mov $3, %%rax\n"
+        "int $0x80\n"
+        :
+        :
+        : "rax", "rcx", "r11", "memory"
+    );
+}
+
+int64_t sys_sleep(uint64_t ms) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $4, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(ms)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
 }

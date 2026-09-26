@@ -31,6 +31,8 @@ void console_init(void) {
 #include "memtest.h"
 #include "process.h"
 #include "usertest.h"
+#include "scheduler.h"
+#include "schedtest.h"
 
 static void console_handle_line(const char *line) {
     if (!line || line[0] == '\0') {
@@ -95,8 +97,30 @@ static void console_handle_line(const char *line) {
         return;
     }
 
+    if (strcmp(line, "ps") == 0) {
+        process_list();
+        vga_println("");
+        scheduler_print_stats();
+        return;
+    }
+
+    if (strcmp(line, "multitask") == 0) {
+        schedtest_spawn_triplet();
+        return;
+    }
+
+    if (strcmp(line, "testsched") == 0) {
+        schedtest_run_all();
+        return;
+    }
+
+    if (strcmp(line, "viol_iso") == 0) {
+        schedtest_trigger_isolation_violation();
+        return;
+    }
+
     if (strcmp(line, "help") == 0) {
-        vga_println("Nyota OS v0.4.0 Console");
+        vga_println("Nyota OS v0.5.0 Console");
         vga_println("Built-in commands:");
         vga_println("  uptime     - System uptime");
         vga_println("  cpu        - CPU hardware info");
@@ -104,9 +128,10 @@ static void console_handle_line(const char *line) {
         vga_println("  mmap       - BIOS E820 physical memory map");
         vga_println("  memtest    - Run Phase 3 memory validation suite");
         vga_println("  crashpf    - Trigger controlled kernel page fault");
-        vga_println("  user       - Spawn and execute Ring 3 user process");
-        vga_println("  testuser   - Run Phase 4 user security & syscall tests");
-        vga_println("  viol_write - Test Ring 3 write violation on kernel memory");
+        vga_println("  ps         - List active processes and scheduling statistics");
+        vga_println("  multitask  - Spawn 3 concurrent user processes and run scheduler");
+        vga_println("  testsched  - Run Phase 5 scheduler & preemption test suite");
+        vga_println("  viol_iso   - Test process memory isolation violation (#PF)");
         vga_println("  clear      - Clear display terminal");
         vga_println("  help       - Show available commands");
         return;

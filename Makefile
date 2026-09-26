@@ -86,12 +86,15 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/memtest.o          \
     $(BUILD_DIR)/syscall.o          \
     $(BUILD_DIR)/process.o          \
+    $(BUILD_DIR)/scheduler.o        \
+    $(BUILD_DIR)/user_programs.o    \
+    $(BUILD_DIR)/schedtest.o        \
     $(BUILD_DIR)/usertest.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
 # ── Phony Targets ─────────────────────────────────────────────────────────────
-.PHONY: all run run-debug run-serial memtest debug clean rebuild help
+.PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help
 
 # Default target: build bootable disk image
 all: $(IMAGE)
@@ -125,7 +128,7 @@ $(STAGE2_BIN): boot/stage2.asm | $(BUILD_DIR)
 # ── Kernel: Link ELF / PE, then extract flat binary ───────────────────────────
 $(KERNEL_BIN): $(KERNEL_ELF)
 	@echo [STRIP] $(KERNEL_BIN)
-	@$(OBJCOPY) -O binary $< $@
+	@$(OBJCOPY) -R .reloc -O binary $< $@
 
 $(KERNEL_ELF): $(ALL_KERNEL_OBJS) linker.ld
 	@echo [LINK]  $(KERNEL_ELF)
@@ -229,6 +232,18 @@ $(BUILD_DIR)/process.o: kernel/process/process.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/process/process.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/scheduler.o: kernel/process/scheduler.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/scheduler.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/user_programs.o: kernel/process/user_programs.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/user_programs.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/schedtest.o: kernel/process/schedtest.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/schedtest.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/usertest.o: kernel/process/usertest.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/process/usertest.c
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -243,6 +258,13 @@ run: $(IMAGE)
 
 # Run in QEMU with serial output piped to terminal without popup window
 run-serial: $(IMAGE)
+	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+
+# Run scheduler / multitasking tests
+scheduler-test: $(IMAGE)
+	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+
+stress-test: $(IMAGE)
 	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
 
 # Run automated memory test runner
