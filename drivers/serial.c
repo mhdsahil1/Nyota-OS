@@ -69,6 +69,30 @@ void serial_write(const char *str) {
     }
 }
 
+void serial_write_hex(uint64_t val) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    serial_write("0x");
+    for (int i = 60; i >= 0; i -= 4) {
+        serial_putchar(hex_chars[(val >> i) & 0xF]);
+    }
+}
+
+void serial_write_dec(uint64_t val) {
+    if (val == 0) {
+        serial_putchar('0');
+        return;
+    }
+    char buf[21];
+    int i = 0;
+    while (val > 0) {
+        buf[i++] = (char)('0' + (val % 10));
+        val /= 10;
+    }
+    for (int j = i - 1; j >= 0; j--) {
+        serial_putchar(buf[j]);
+    }
+}
+
 bool serial_has_data(void) {
     if (!serial_initialized) {
         serial_init();

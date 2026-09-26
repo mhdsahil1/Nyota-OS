@@ -19,7 +19,7 @@
 
 KERNEL_TEMP_BUF   equ 0x10000   ; Temporary buffer in low memory
 KERNEL_TARGET_ADDR equ 0x100000  ; Final destination: 1 MB mark
-KERNEL_SECTOR_CNT equ 64        ; Read 64 sectors (32 KB)
+KERNEL_SECTOR_CNT equ 128       ; Read 128 sectors (64 KB)
 KERNEL_START_LBA  equ 5         ; LBA 5 (Sector 0=boot, Sectors 1..4=stage2)
 
 stage2_entry:
@@ -42,19 +42,22 @@ stage2_entry:
     ; 1. Load kernel from disk
     call load_kernel_data
 
-    ; 2. Enable A20 line
+    ; 2. Detect BIOS physical memory map (E820)
+    call detect_memory_e820
+
+    ; 3. Enable A20 line
     call enable_a20
 
-    ; 3. Verify CPU capabilities (CPUID & Long Mode)
+    ; 4. Verify CPU capabilities (CPUID & Long Mode)
     call check_cpu_long_mode
 
-    ; 4. Prepare Page Tables (PML4, PDPT, PD)
+    ; 5. Prepare Page Tables (PML4, PDPT, PD)
     call setup_paging_tables
 
-    ; 5. Disable interrupts for mode transition
+    ; 6. Disable interrupts for mode transition
     cli
 
-    ; 6. Load 64-bit GDT
+    ; 7. Load 64-bit GDT
     lgdt [gdt64_desc]
 
     ; 7. Set CR3 to point to PML4 base address (0x1000)
@@ -240,9 +243,84 @@ check_cpu_long_mode:
     call puts16
     ret
 
-; ── Page Table Setup (4-level Paging for Identity Map 0-16MB) ────────────────
+; ── Detect BIOS Physical Memory Map (E820) ───────────────────────────────────
+E820_MAP_COUNT  equ 0x5000
+E820_MAP_BUF    equ 0x5008
+E820_SMAP_MAGIC equ 0x534D4150
+
+detect_memory_e820:
+    push es
+    push di
+    push ds
+    push si
+    push ebx
+    push edx
+    push ecx
+    push bp
+
+    xor  ax, ax
+    mov  es, ax
+    mov  ds, ax
+    mov  di, E820_MAP_BUF
+    xor  ebx, ebx
+    xor  bp, bp
+
+.e820_loop:
+    mov  eax, 0xE820
+    mov  edx, E820_SMAP_MAGIC
+    mov  ecx, 24
+    mov  dword [es:di + 20], 1  ; Default ACPI 3.0 attribute
+    int  0x15
+    jc   .e820_done
+
+    cmp  eax, E820_SMAP_MAGIC
+    jne  .e820_failed
+
+    test ecx, ecx
+    jz   .skip_entry
+    cmp  cl, 20
+    jb   .skip_entry
+
+    inc  bp
+    add  di, 24
+
+.skip_entry:
+    test ebx, ebx
+    jz   .e820_done
+    cmp  bp, 64
+    jae  .e820_done
+    jmp  .e820_loop
+
+.e820_done:
+    mov  word [ds:E820_MAP_COUNT], bp
+    mov  word [ds:E820_MAP_COUNT + 2], 0
+    mov  si, msg_mmap_ok
+    call puts16
+    pop  bp
+    pop  ecx
+    pop  edx
+    pop  ebx
+    pop  si
+    pop  ds
+    pop  di
+    pop  es
+    ret
+
+.e820_failed:
+    mov  dword [ds:E820_MAP_COUNT], 0
+    pop  bp
+    pop  ecx
+    pop  edx
+    pop  ebx
+    pop  si
+    pop  ds
+    pop  di
+    pop  es
+    ret
+
+; ── Page Table Setup (4-level Paging for Identity Map 0-128MB) ────────────────
 setup_paging_tables:
-    ; Clear 12 KB memory from 0x1000 to 0x4000
+    ; Clear 12 KB memory from 0x1000 to 0x4000 (PML4, PDPT, PD)
     mov  edi, 0x1000
     xor  eax, eax
     mov  ecx, 3072              ; 12288 bytes / 4 = 3072 dwords
@@ -254,23 +332,16 @@ setup_paging_tables:
     ; PDPT[0] at 0x2000 points to PD at 0x3000 (Flags: Present=1, Writable=1)
     mov  dword [0x2000], 0x3003
 
-    ; PD at 0x3000 identity maps 0 - 16 MB using eight 2MB huge pages (Flag: 0x83)
-    ; Entry 0: 0x00000000 - 0x001FFFFF
-    mov  dword [0x3000], 0x00000083
-    ; Entry 1: 0x00200000 - 0x003FFFFF
-    mov  dword [0x3008], 0x00200083
-    ; Entry 2: 0x00400000 - 0x005FFFFF
-    mov  dword [0x3010], 0x00400083
-    ; Entry 3: 0x00600000 - 0x007FFFFF
-    mov  dword [0x3018], 0x00600083
-    ; Entry 4: 0x00800000 - 0x009FFFFF
-    mov  dword [0x3020], 0x00800083
-    ; Entry 5: 0x00A00000 - 0x00BFFFFF
-    mov  dword [0x3028], 0x00A00083
-    ; Entry 6: 0x00C00000 - 0x00DFFFFF
-    mov  dword [0x3030], 0x00C00083
-    ; Entry 7: 0x00E00000 - 0x00FFFFFF
-    mov  dword [0x3038], 0x00E00083
+    ; PD at 0x3000 identity maps 0 - 128 MB using 64 2MB huge pages (Flag: 0x83)
+    mov  edi, 0x3000
+    mov  eax, 0x00000083        ; Base 0, Present=1, Writable=1, Page Size=2MB (Bit 7=1)
+    mov  ecx, 64                ; 64 * 2MB = 128 MB (entries 64..511 remain zero/not present)
+.map_pd:
+    mov  dword [edi], eax
+    mov  dword [edi + 4], 0
+    add  eax, 0x00200000        ; Next 2MB boundary
+    add  edi, 8
+    loop .map_pd
     ret
 
 ; =============================================================================
@@ -330,6 +401,7 @@ msg_stage2:         db "Stage 2: Initializing CPU and loading kernel...", 0x0D, 
 msg_kernel_loaded:  db "Stage 2: Kernel loaded into memory.", 0x0D, 0x0A, 0
 msg_a20_ok:         db "Stage 2: A20 gate verified.", 0x0D, 0x0A, 0
 msg_lm_ok:          db "Stage 2: CPU Long Mode verified. Entering 64-bit...", 0x0D, 0x0A, 0
+msg_mmap_ok:        db "Stage 2: E820 memory map detected.", 0x0D, 0x0A, 0
 err_kernel_read:    db "FATAL: Kernel disk read failed! System halted.", 0x0D, 0x0A, 0
 err_a20:            db "FATAL: Failed to enable A20 line! System halted.", 0x0D, 0x0A, 0
 err_no_cpuid:       db "FATAL: CPU does not support CPUID! System halted.", 0x0D, 0x0A, 0

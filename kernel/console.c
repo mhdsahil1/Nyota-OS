@@ -26,6 +26,9 @@ void console_init(void) {
 }
 
 #include "cpu.h"
+#include "pmm.h"
+#include "heap.h"
+#include "memtest.h"
 
 static void console_handle_line(const char *line) {
     if (!line || line[0] == '\0') {
@@ -50,14 +53,43 @@ static void console_handle_line(const char *line) {
         return;
     }
 
-    if (strcmp(line, "help") == 0) {
-        vga_println("Nyota OS v0.2.0 Console");
-        vga_println("Type any text to echo it back.");
-        vga_println("Built-in commands: uptime, cpu, clear, help");
+    if (strcmp(line, "mem") == 0) {
+        pmm_print_stats();
+        vga_println("");
+        heap_print_stats();
         return;
     }
 
-    /* Standard Phase 2 behavior: echo the input line */
+    if (strcmp(line, "mmap") == 0) {
+        pmm_print_mmap();
+        return;
+    }
+
+    if (strcmp(line, "memtest") == 0) {
+        memtest_run_all();
+        return;
+    }
+
+    if (strcmp(line, "crashpf") == 0) {
+        memtest_trigger_page_fault();
+        return;
+    }
+
+    if (strcmp(line, "help") == 0) {
+        vga_println("Nyota OS v0.3.0 Console");
+        vga_println("Built-in commands:");
+        vga_println("  uptime   - System uptime");
+        vga_println("  cpu      - CPU hardware info");
+        vga_println("  mem      - Memory usage & statistics");
+        vga_println("  mmap     - BIOS E820 physical memory map");
+        vga_println("  memtest  - Run Phase 3 memory validation suite");
+        vga_println("  crashpf  - Trigger controlled page fault test");
+        vga_println("  clear    - Clear display terminal");
+        vga_println("  help     - Show available commands");
+        return;
+    }
+
+    /* Standard behavior: echo the input line */
     vga_println(line);
 }
 

@@ -117,6 +117,89 @@ void panic_with_frame(const char *title, const interrupt_frame_t *frame) {
     }
 }
 
+static void page_fault_handler(interrupt_frame_t *frame) {
+    __asm__ volatile ("cli");
+
+    uint64_t cr2;
+    __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+
+    uint64_t err = frame->error_code;
+    bool present = (err & 0x01) != 0;
+    bool write   = (err & 0x02) != 0;
+    bool user    = (err & 0x04) != 0;
+    bool rsvd    = (err & 0x08) != 0;
+    bool fetch   = (err & 0x10) != 0;
+    bool pk      = (err & 0x20) != 0;
+
+    /* Write to COM1 serial for debugging/headless test */
+    serial_write("\n========================================\n");
+    serial_write("           NYOTA PAGE FAULT             \n");
+    serial_write("========================================\n");
+    serial_write("Error Code : "); serial_write_hex(err); serial_write("\n");
+    serial_write("Fault Addr : "); serial_write_hex(cr2); serial_write("\n");
+    serial_write("RIP        : "); serial_write_hex(frame->rip); serial_write("\n");
+    serial_write("Access     : "); serial_write(fetch ? "EXECUTE\n" : (write ? "WRITE\n" : "READ\n"));
+    serial_write("Cause      : "); serial_write(rsvd ? "RESERVED BIT\n" : (pk ? "PROTECTION KEY\n" : (present ? "PROTECTION VIOLATION\n" : "NOT PRESENT\n")));
+    serial_write("Mode       : "); serial_write(user ? "USER\n" : "KERNEL\n");
+    serial_write("========================================\n");
+
+    /* Format on VGA */
+    vga_set_color(VGA_WHITE, VGA_RED);
+    vga_println("");
+    vga_println("+========================================+");
+    vga_println("|          NYOTA PAGE FAULT              |");
+    vga_println("+========================================+");
+
+    vga_print("| Error Code : ");
+    vga_print_hex(err);
+    vga_println("        |");
+
+    vga_print("| Fault Addr : ");
+    vga_print_hex(cr2);
+    vga_println("|");
+
+    vga_print("| RIP        : ");
+    vga_print_hex(frame->rip);
+    vga_println("|");
+
+    vga_print("| Mode       : ");
+    vga_print(user ? "USER                     |" : "KERNEL                   |");
+    vga_println("");
+
+    vga_print("| Access     : ");
+    if (fetch) {
+        vga_print("EXECUTE                  |");
+    } else if (write) {
+        vga_print("WRITE                    |");
+    } else {
+        vga_print("READ                     |");
+    }
+    vga_println("");
+
+    vga_print("| Cause      : ");
+    if (rsvd) {
+        vga_print("RESERVED BIT             |");
+    } else if (pk) {
+        vga_print("PROTECTION KEY           |");
+    } else if (present) {
+        vga_print("PROTECTION VIOLATION     |");
+    } else {
+        vga_print("NOT PRESENT              |");
+    }
+    vga_println("");
+
+    vga_println("+========================================+");
+    vga_println("");
+    vga_print("RSP: "); vga_print_hex(frame->rsp);
+    vga_print("  RFLAGS: "); vga_print_hex(frame->rflags);
+    vga_println("");
+    vga_println("System halted.");
+
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}
+
 void exception_handler(interrupt_frame_t *frame) {
     if (!frame) return;
 
@@ -127,6 +210,12 @@ void exception_handler(interrupt_frame_t *frame) {
         vga_print_hex(frame->rip);
         vga_println("");
         vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        return;
+    }
+
+    /* Vector 14: Page Fault (#PF) — specialized diagnostic display */
+    if (frame->vector == 14) {
+        page_fault_handler(frame);
         return;
     }
 

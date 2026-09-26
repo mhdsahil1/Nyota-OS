@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-2%3A%20Interrupts%20%26%20Input-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.2.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-3%3A%20Memory%20Management-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.3.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,10 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-3-overview">Phase 3 Overview</a>
+  ·
+  <a href="#-memory-architecture">Memory Architecture</a>
+  ·
   <a href="#-phase-2-overview">Phase 2 Overview</a>
   ·
   <a href="#-interrupt-architecture">Interrupt Architecture</a>
@@ -52,9 +56,91 @@
 
 ---
 
+# 🧠 Phase 3 Overview
+
+**Current Status:** **Phase 3 — Memory Management** (Completed)
+
+Phase 3 transitions Nyota OS from using raw unmanaged physical memory to an enterprise-grade, multi-tier memory architecture with hardware-backed paging, page-frame allocation, dynamic heap management, and comprehensive page-fault diagnostics:
+
+- **BIOS E820 Memory Map Parser**: Queries BIOS `INT 15h, AX=E820h` during Stage 2 bootloader to discover real hardware memory regions (`USABLE`, `RESERVED`, `ACPI`, `ACPI_RECLAIMABLE`, `BAD`).
+- **Physical Memory Manager (PMM)**: Implements a 4 KiB frame bitmap allocator tracking physical pages, reserving firmware, bootloader, kernel code/data/BSS, page tables, and bitmap structures.
+- **4-Level x86_64 Paging Architecture (VMM)**: Manages PML4, PDPT, Page Directory, and Page Table structures with fine-grained entry permissions (`PRESENT`, `WRITABLE`, `USER`, `NX`).
+- **Dynamic Virtual Page Mapping**: Provides `paging_map_page()`, `paging_unmap_page()`, and `paging_get_physical()` with on-demand allocation of intermediate page table levels.
+- **CR3 & TLB Management**: Direct hardware control of CR3 register and precise per-page TLB invalidation via `invlpg`.
+- **Page Fault Diagnostics (#PF, Vector 14)**: Reads `CR2`, decodes architectural error code flags (Present/Protection, Read/Write, User/Kernel, Instruction Fetch, Reserved Bit, Protection Key), and renders a structured diagnostic box.
+- **Kernel Dynamic Heap**: Dynamic memory allocator providing `kmalloc()`, `kfree()`, `kcalloc()`, and `krealloc()`. Operates on high virtual memory (`0xFFFFFFFF90000000`), guarantees 16-byte alignment, implements free-block coalescing, and dynamically expands by mapping additional physical frames through the VMM.
+- **Lightweight Corruption Detection**: Employs magic values (`0x4E594F5441` "NYOTA" and `0xDEADBEEF`) for heap block header validation.
+- **Interactive Memory Diagnostics & Stress Suite**: Console commands `mem` (RAM and heap statistics), `mmap` (E820 memory map table), `memtest` (automated PMM, VMM, heap, and 100-block stress test), and `crashpf` (controlled page-fault verification).
+
+---
+
+# 🗺️ Memory Architecture
+
+```text
+                    NYOTA MEMORY SYSTEM
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+      Physical Memory              Virtual Memory
+             │                           │
+             ▼                           ▼
+      Memory Map Parser             Page Tables
+        (BIOS E820)             (PML4/PDPT/PD/PT)
+             │                           │
+             ▼                           ▼
+      Page Frame Allocator       Virtual Mapping
+       (4 KiB Bitmap)          (paging_map_page)
+             │                           │
+             └─────────────┬─────────────┘
+                           ▼
+                     Kernel Heap
+               (0xFFFFFFFF90000000)
+                           │
+                 ┌─────────┴─────────┐
+                 ▼                   ▼
+              kmalloc()           kfree()
+```
+
+### 4-Level x86_64 Page Translation Hierarchy
+
+```text
+                 Virtual Address
+                       │
+                       ▼
+                    PML4  (Page Map Level 4)
+                       │
+                       ▼
+                    PDPT  (Page Directory Pointer Table)
+                       │
+                       ▼
+                     PD   (Page Directory)
+                       │
+                       ▼
+                     PT   (Page Table)
+                       │
+                       ▼
+                Physical Page (4 KiB Frame)
+                       │
+                       ▼
+                 Physical RAM
+```
+
+### Virtual & Physical Memory Layout
+
+| Virtual Address Range | Size | Description | Attributes |
+| :--- | :--- | :--- | :--- |
+| `0x0000000000000000` - `0x000000000009FFFF` | 640 KB | Conventional RAM (IVT, BDA, Bootloader, Page Tables, Stack) | Present, Writable |
+| `0x00000000000A0000` - `0x00000000000FFFFF` | 384 KB | Video Memory (VGA `0xB8000`) & Motherboard BIOS ROM | Present, Writable |
+| `0x0000000000100000` - `_kernel_end` | ~40 KB | Kernel Code (`.text`), Read-Only Data (`.rodata`), Data, BSS | Present, Writable |
+| `_kernel_end` - `+4KB` | 4 KB | PMM Page Frame Allocation Bitmap | Present, Writable |
+| `0x0000000000100000` - `0x0000000008000000` | 128 MB | Identity-Mapped Physical RAM (Backed by 64x 2MB Pages in PD) | Present, Writable |
+| `0xFFFFFFFF90000000` - `0xFFFFFFFF90100000` | 1 MB+ | Kernel Dynamic Heap (Expands dynamically on demand) | Present, Writable |
+
+---
+
 # 🚀 Phase 2 Overview
 
-**Current Status:** **Phase 2 — Interrupts, Exceptions, Timer & Keyboard** (Completed)
+**Phase 2 — Interrupts, Exceptions, Timer & Keyboard** (Completed)
 
 Phase 2 transforms Nyota OS from a static kernel that boots and halts into a reactive, event-driven operating system responding dynamically to hardware events, CPU exceptions, clock ticks, and keyboard strokes:
 
@@ -525,6 +611,7 @@ Inside GDB:
 | `make run` | Launch OS in QEMU with VGA display & serial console |
 | `make run-serial` | Run in QEMU headless (prints serial output directly to terminal) |
 | `make run-debug` | Launch QEMU with GDB stub paused on port 1234 |
+| `make memtest` | Run headless QEMU for automated memory verification |
 | `make debug` | Build with debug symbols enabled (`-g`) |
 | `make clean` | Remove all generated binaries and build artifacts |
 | `make rebuild` | Perform a clean build from scratch |
@@ -532,14 +619,13 @@ Inside GDB:
 
 ---
 
-# ⚠️ Current Limitations (Phase 2)
+# ⚠️ Current Limitations (Phase 3)
 
-Phase 2 successfully implements the complete interrupt pipeline, exception handling, PIT timer, PS/2 keyboard driver, and interactive console. The following subsystems belong to subsequent phases:
+Phase 3 successfully implements physical memory detection (E820), a bitmap page frame allocator (PMM), 4-level x86_64 paging (VMM), page fault diagnostics (#PF), and the kernel dynamic heap (`kmalloc`/`kfree`/`kcalloc`/`krealloc`). The following subsystems belong to subsequent phases:
 
-- Dynamic memory management (Physical frame allocator, virtual memory manager, heap `kmalloc`/`kfree`) is deferred to Phase 3.
 - Multitasking, Task State Segment (TSS), context switching, and scheduler are deferred to Phase 4.
 - Storage controller drivers (IDE/ATA) and Virtual File System (VFS) are deferred to Phase 5.
-- Ring 3 User Space transition, system calls (`syscall`/`sysret`), and userland binaries are deferred to Phase 6.
+- Ring 3 User Space transition, user process virtual address spaces, system calls (`syscall`/`sysret`), and userland binaries are deferred to Phase 6.
 
 ---
 
@@ -570,12 +656,18 @@ Phase 2: Interrupts & Input Architecture         ◄ [COMPLETED]
    ├── Lock-Free Keyboard Event Circular Buffer
    └── Interactive Kernel Console (nyota> shell)
 
-Phase 3: Memory Management                       ◄ [NEXT]
-   ├── Physical Memory Allocator (Bitmap / Buddy)
-   ├── Virtual Memory Manager & Dynamic Paging
-   └── Kernel Heap (kmalloc / kfree)
+Phase 3: Memory Management                       ◄ [COMPLETED]
+   ├── BIOS E820 Physical Memory Map Parser
+   ├── Physical Memory Manager (PMM) & Bitmap Allocator
+   ├── 4-Level x86_64 Paging Architecture (PML4, PDPT, PD, PT)
+   ├── Dynamic Page Mapping & Unmapping (paging_map_page)
+   ├── CR3 Control & TLB Invalidation (invlpg)
+   ├── Architectural Page Fault Diagnostics (#PF Vector 14, CR2)
+   ├── Kernel Dynamic Heap (kmalloc, kfree, kcalloc, krealloc)
+   ├── Free-Block Coalescing & Dynamic Heap Expansion
+   └── Memory Test Suite (PMM, VMM, Heap, 100-Block Stress Test)
 
-Phase 4: Multitasking & Processes
+Phase 4: Multitasking & Processes                ◄ [NEXT]
    ├── Task State Segment (TSS)
    ├── Context Switching
    └── Round-Robin Cooperative/Preemptive Scheduler

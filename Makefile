@@ -77,12 +77,16 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/pic.o              \
     $(BUILD_DIR)/timer.o            \
     $(BUILD_DIR)/keyboard.o         \
-    $(BUILD_DIR)/console.o
+    $(BUILD_DIR)/console.o          \
+    $(BUILD_DIR)/pmm.o              \
+    $(BUILD_DIR)/paging.o           \
+    $(BUILD_DIR)/heap.o             \
+    $(BUILD_DIR)/memtest.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
 # ── Phony Targets ─────────────────────────────────────────────────────────────
-.PHONY: all run run-debug run-serial debug clean rebuild help
+.PHONY: all run run-debug run-serial memtest debug clean rebuild help
 
 # Default target: build bootable disk image
 all: $(IMAGE)
@@ -188,6 +192,22 @@ $(BUILD_DIR)/console.o: kernel/console.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/console.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/pmm.o: kernel/memory/pmm.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/memory/pmm.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/paging.o: kernel/arch/x86_64/paging.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/paging.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/heap.o: kernel/memory/heap.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/memory/heap.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/memtest.o: kernel/memory/memtest.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/memory/memtest.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 # ── Build Directory ───────────────────────────────────────────────────────────
 $(BUILD_DIR):
 	@$(MKDIR_CMD)
@@ -198,6 +218,10 @@ run: $(IMAGE)
 
 # Run in QEMU with serial output piped to terminal without popup window
 run-serial: $(IMAGE)
+	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+
+# Run automated memory test runner
+memtest: $(IMAGE)
 	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
 
 # Run with GDB server attached (waits on port 1234)
@@ -220,6 +244,7 @@ help:
 	@echo   make run          Launch in QEMU (with interactive display and serial)
 	@echo   make run-serial   Launch in QEMU headless (serial output to terminal)
 	@echo   make run-debug    Launch in QEMU with GDB stub paused on port 1234
+	@echo   make memtest      Run headless QEMU for memory testing
 	@echo   make clean        Remove all build artifacts and generated images
 	@echo   make rebuild      Clean build directory and build fresh image
 	@echo   make debug        Build with debug symbols (-g)

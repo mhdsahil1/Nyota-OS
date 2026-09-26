@@ -16,6 +16,9 @@
 #include "keyboard.h"
 #include "console.h"
 #include "exceptions.h"
+#include "pmm.h"
+#include "paging.h"
+#include "heap.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -148,13 +151,60 @@ void kernel_main(void) {
     vga_println("Interrupts");
     vga_println("");
 
-    /* 10. Display Initial Uptime */
-    char uptime_str[16];
-    timer_format_uptime(uptime_str, sizeof(uptime_str));
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    vga_print("Uptime: ");
-    vga_println(uptime_str);
+    /* 10. Memory Subsystems (PMM, Paging, Virtual Memory, Heap) */
+    vga_println("Memory");
+    vga_println("----------------------------------------");
+
+    pmm_init();
+    vga_print("Total Memory : ");
+    vga_print_dec(pmm_total_memory() / (1024 * 1024));
+    vga_println(" MB");
+
+    vga_print("Usable       : ");
+    vga_print_dec(pmm_usable_memory() / (1024 * 1024));
+    vga_println(" MB");
     vga_println("");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Physical Memory Manager");
+
+    paging_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Paging");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Kernel Virtual Memory");
+
+    heap_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Kernel Heap");
+    vga_println("");
+
+    vga_println("Kernel Heap");
+    vga_println("----------------------------------------");
+    vga_print("Start : ");
+    vga_print_hex(heap_get_start());
+    vga_println("");
+    vga_print("Size  : ");
+    vga_print_dec(heap_get_total() / (1024 * 1024));
+    vga_println(" MB");
+    vga_print("Used  : ");
+    vga_print_dec(heap_get_used() / 1024);
+    vga_println(" KB");
+    vga_println("");
+
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_println("System ready.");
+    vga_println("");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
 
     /* 11. Launch Interactive Kernel Console */
     console_run();
