@@ -41,10 +41,28 @@ void paging_init(void) {
     }
 }
 
-/* ── Virtual Page Mapping ─────────────────────────────────────────────────── */
+/* ── Address Space & Virtual Page Mapping ─────────────────────────────────── */
 
-bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
-    if (!kernel_pml4) return false;
+page_table_t *paging_create_address_space(void) {
+    if (!kernel_pml4) return NULL;
+
+    page_table_t *new_pml4 = (page_table_t *)pmm_alloc_page();
+    if (!new_pml4) return NULL;
+
+    memset(new_pml4, 0, sizeof(page_table_t));
+
+    /* Clone kernel mappings with supervisor-only privilege (PAGE_USER = 0):
+     * PML4[0]: Kernel identity map (0..128 MB)
+     * PML4[511]: Kernel heap (0xFFFFFFFF90000000)
+     */
+    new_pml4->entries[0] = kernel_pml4->entries[0] & ~PAGE_USER;
+    new_pml4->entries[511] = kernel_pml4->entries[511] & ~PAGE_USER;
+
+    return new_pml4;
+}
+
+bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) {
+    if (!pml4) return false;
 
     virt = PAGE_ALIGN_DOWN(virt);
     phys = PAGE_ALIGN_DOWN(phys);
@@ -55,18 +73,22 @@ bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
     uint64_t pt_i   = PT_INDEX(virt);
 
     /* 1. Walk or create PDPT */
-    if (!(kernel_pml4->entries[pml4_i] & PAGE_PRESENT)) {
+    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) {
         void *new_pdpt = pmm_alloc_page();
         if (!new_pdpt) return false;
-        kernel_pml4->entries[pml4_i] = ((uint64_t)new_pdpt) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+        pml4->entries[pml4_i] = ((uint64_t)new_pdpt) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+    } else if (flags & PAGE_USER) {
+        pml4->entries[pml4_i] |= PAGE_USER;
     }
-    page_table_t *pdpt = (page_table_t *)(kernel_pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
+    page_table_t *pdpt = (page_table_t *)(pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
 
     /* 2. Walk or create PD */
     if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) {
         void *new_pd = pmm_alloc_page();
         if (!new_pd) return false;
         pdpt->entries[pdpt_i] = ((uint64_t)new_pd) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+    } else if (flags & PAGE_USER) {
+        pdpt->entries[pdpt_i] |= PAGE_USER;
     }
     page_table_t *pd = (page_table_t *)(pdpt->entries[pdpt_i] & PAGE_ENTRY_ADDR_MASK);
 
@@ -78,6 +100,8 @@ bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
     } else if (pd->entries[pd_i] & PAGE_HUGE) {
         /* Already mapped as 2MB huge page */
         return false;
+    } else if (flags & PAGE_USER) {
+        pd->entries[pd_i] |= PAGE_USER;
     }
     page_table_t *pt = (page_table_t *)(pd->entries[pd_i] & PAGE_ENTRY_ADDR_MASK);
 
@@ -86,6 +110,10 @@ bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
     paging_invlpg(virt);
 
     return true;
+}
+
+bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
+    return paging_map_page_in(kernel_pml4, virt, phys, flags);
 }
 
 bool paging_unmap_page(uint64_t virt) {
@@ -117,16 +145,16 @@ bool paging_unmap_page(uint64_t virt) {
     return true;
 }
 
-uint64_t paging_get_physical(uint64_t virt) {
-    if (!kernel_pml4) return 0;
+uint64_t paging_get_physical_in(page_table_t *pml4, uint64_t virt) {
+    if (!pml4) return 0;
 
     uint64_t pml4_i = PML4_INDEX(virt);
     uint64_t pdpt_i = PDPT_INDEX(virt);
     uint64_t pd_i   = PD_INDEX(virt);
     uint64_t pt_i   = PT_INDEX(virt);
 
-    if (!(kernel_pml4->entries[pml4_i] & PAGE_PRESENT)) return 0;
-    page_table_t *pdpt = (page_table_t *)(kernel_pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
+    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) return 0;
+    page_table_t *pdpt = (page_table_t *)(pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
 
     if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) return 0;
     page_table_t *pd = (page_table_t *)(pdpt->entries[pdpt_i] & PAGE_ENTRY_ADDR_MASK);
@@ -144,4 +172,8 @@ uint64_t paging_get_physical(uint64_t virt) {
 
     uint64_t base = pt->entries[pt_i] & PAGE_ENTRY_ADDR_MASK;
     return base + PAGE_OFFSET(virt);
+}
+
+uint64_t paging_get_physical(uint64_t virt) {
+    return paging_get_physical_in(kernel_pml4, virt);
 }

@@ -47,9 +47,12 @@ void paging_load_cr3(uint64_t pml4_phys);
 void paging_invlpg(uint64_t virt);
 
 bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
+bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);
 bool paging_unmap_page(uint64_t virt);
 uint64_t paging_get_physical(uint64_t virt);
+uint64_t paging_get_physical_in(page_table_t *pml4, uint64_t virt);
 
+page_table_t *paging_create_address_space(void);
 page_table_t *paging_get_kernel_pml4(void);
 
 #endif /* NYOTA_PAGING_H */

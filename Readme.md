@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-3%3A%20Memory%20Management-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.3.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-4%3A%20Processes%2C%20User%20Mode%20%26%20Syscalls-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.4.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-4-overview-processes-user-mode--system-calls">Phase 4 Overview</a>
+  ·
   <a href="#-phase-3-overview">Phase 3 Overview</a>
   ·
   <a href="#-memory-architecture">Memory Architecture</a>
@@ -53,6 +55,93 @@
 > Every subsystem added to Nyota should have a clear interface, a testable implementation, and a reason to exist.
 > The goal isn't to make Nyota look like an operating system.
 > **The goal is to make Nyota actually behave like one.**
+
+---
+
+# 🛡️ Phase 4 Overview: Processes, User Mode & System Calls
+
+**Current Status:** **Phase 4 — Processes, User Mode & System Calls** (Completed)
+
+Phase 4 introduces true hardware privilege separation to Nyota OS, transitioning the architecture from a monolithic Ring 0 environment to a secure operating system capable of executing untrusted code in **Ring 3 User Mode** with managed entry back into **Ring 0 Kernel Mode** via **System Calls**:
+
+```text
+                    NYOTA OS ARCHITECTURE
+                              │
+          ┌───────────────────┴───────────────────┐
+          │                                       │
+     Kernel Space                            User Space
+    (Ring 0 - CPL=0)                      (Ring 3 - CPL=3)
+          │                                       │
+          │                                ┌──────┴──────┐
+          │                                │ User Program│
+          │                                │   (PID 1)   │
+          │                                └──────┬──────┘
+          │                                       │
+          │                               int 0x80 / syscall
+          │                                       │
+          ▼                                       ▼
+       Kernel ◄───────────────────────────────────┘
+   (Switch to RSP0)
+          │
+          ▼
+   Syscall Dispatcher
+          │
+   ┌──────┼──────┐
+   ▼      ▼      ▼
+ WRITE   EXIT  GETPID
+```
+
+### Key Subsystems Delivered in Phase 4:
+
+1. **Hardware Ring 0 / Ring 3 Privilege Separation**:
+   - Extended Global Descriptor Table (GDT) with 64-bit User Data (`0x18 | 3 = 0x1B`, DPL=3) and User Code (`0x20 | 3 = 0x23`, DPL=3) segment descriptors.
+   - User program executes with `CS.RPL = 3` and `SS.RPL = 3`.
+   - Kernel transition helper (`user_enter_ring3`) loads user data segments (`DS`, `ES`, `FS`, `GS`), constructs an architectural 5-quadword `iretq` stack frame (`SS`, `RSP`, `RFLAGS` with IF=1, `CS`, `RIP`), and performs hardware Ring 3 transition.
+
+2. **64-bit Task State Segment (TSS)**:
+   - Full 104-byte x86_64 Task State Segment structure (`tss_t`) with `iomap_base` set to 104 (disabling I/O port bitmap).
+   - Installed in GDT as a 16-byte system descriptor (`0x28`) and activated via CPU `ltr 0x28`.
+   - Dynamic `RSP0` pointer switching via `tss_set_rsp0()` ensures every user process switches to its dedicated 16 KiB kernel stack upon interrupt or syscall entry.
+
+3. **Isolated User Virtual Address Spaces (VMM)**:
+   - User space is quarantined in PML4 index 1 (512 GB mark: `0x0000008000000000ULL` to `0x0000010000000000ULL`).
+   - `paging_create_address_space()` clones the kernel identity map (0..128 MB) and kernel heap (`0xFFFFFFFF90000000ULL`) as supervisor-only (`USER = 0`), preventing any Ring 3 read, write, or execution of kernel code or structures.
+   - User code page mapped at `USER_CODE_BASE` (`0x0000008000000000ULL`) with `PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE`.
+   - Dedicated 16 KiB user stack mapped below `USER_STACK_TOP` (`0x0000008000010000ULL`) with `PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE`.
+
+4. **System Call Interface & Dispatcher (Vector 0x80)**:
+   - Vector `0x80` configured as a User Trap Gate (`IDT_GATE_USER_TRAP` = `0xEE`, DPL=3), callable from Ring 3 without triggering a `#GP`.
+   - **System V AMD64 Syscall ABI**:
+     * `RAX`: Syscall Number / Return Value
+     * `RDI`: Argument 1 (e.g., buffer pointer, status)
+     * `RSI`: Argument 2 (e.g., length)
+     * `RDX`: Argument 3
+     * `R10`: Argument 4
+     * `R8` : Argument 5
+   - Core System Calls:
+     * `SYS_WRITE` (0): Outputs validated user buffer to VGA text console and serial COM1.
+     * `SYS_EXIT` (1): Terminates user process with status code and restores kernel CR3.
+     * `SYS_GETPID` (2): Returns active process PID.
+
+5. **Defensive Pointer Validation & Safe Memory Copying**:
+   - All user-supplied pointers are treated as hostile.
+   - `user_validate_pointer()` verifies:
+     * Pointer is non-NULL.
+     * Virtual range `[ptr, ptr + len)` is strictly contained within `USER_SPACE_BASE` and `USER_SPACE_END`.
+     * No integer overflow / arithmetic wrap-around.
+     * All targeted pages are present in the active process page tables.
+   - `copy_from_user()` and `copy_to_user()` prevent malicious pointers from triggering arbitrary kernel memory reads or writes.
+   - Unknown syscall numbers return `-ENOSYS` safely without jumping through unchecked pointers.
+
+6. **Process Abstraction & PID System**:
+   - Process Control Block (`process_t`): tracks PID, CR3 page table physical base, entry point, user stack top, dedicated kernel stack top, execution state (`READY`, `RUNNING`, `TERMINATED`), and exit status.
+   - Sequential PID allocation starting at PID 1.
+   - Position-independent initial user program blob executes in Ring 3, performs `SYS_WRITE` ("Hello from user space!"), retrieves PID via `SYS_GETPID` (1), formats and writes the PID, and cleanly exits via `SYS_EXIT(0)`.
+   - Ring 3 page fault recovery: if user code touches kernel memory, the page fault handler cleanly kills the offending process with `SIGSEGV` (-11) and drops back to the interactive console without halting or crashing the kernel.
+
+7. **Automated User Security & Syscall Test Suite**:
+   - Built-in `testuser` command runs 4 automated tests verifying TSS/TR registers, unknown syscall rejection, hostile pointer rejection (NULL, kernel code `0x100000`, kernel heap), and `copy_from_user` boundary enforcement.
+   - `viol_write` command spawns a rogue Ring 3 process attempting to write to `0x100000`, demonstrating genuine CPU page-protection enforcement (#PF).
 
 ---
 
@@ -240,35 +329,46 @@ nyota-os/
 │
 ├── boot/
 │   ├── boot.asm             # Stage 1 MBR boot sector (512 bytes, 0xAA55)
-│   └── stage2.asm           # Stage 2: A20, CPUID, Paging, GDT, Long Mode switch
+│   └── stage2.asm           # Stage 2: A20, CPUID, Paging, GDT, E820 mmap, Long Mode
 │
 ├── kernel/
-│   ├── kernel.c             # C kernel entry (kernel_main) and logging
+│   ├── kernel.c             # C kernel entry (kernel_main) and subsystem bring-up
 │   ├── kernel_entry.asm     # 64-bit entry point, stack setup, calls kernel_main
-│   ├── console.c            # Interactive kernel console and line editing
+│   ├── console.c            # Interactive kernel console and line editing shell
 │   │
 │   ├── arch/
 │   │   └── x86_64/
-│   │       ├── idt.c        # 256-entry 64-bit IDT initialization & gate setup
-│   │       ├── interrupts.asm # 256 ISR stubs, stack frame setup, iretq
+│   │       ├── idt.c        # 256-entry 64-bit IDT initialization & trap/user gates
+│   │       ├── interrupts.asm # 256 ISR stubs, uniform stack frames, iretq
 │   │       ├── dispatcher.c # Centralized interrupt dispatcher & handler table
-│   │       ├── exceptions.c # CPU exception handlers (0..31) & diagnostic panic
+│   │       ├── exceptions.c # CPU exception handlers (0..31) & page fault diagnostics
 │   │       ├── pic.c        # 8259 PIC initialization, IRQ remapping, EOI
-│   │       └── io.h         # Architecture port I/O wrappers
+│   │       ├── paging.c     # 4-level paging (PML4, PDPT, PD, PT), map/unmap, VMM
+│   │       └── syscall.c    # Vector 0x80 syscall dispatcher & pointer validation
 │   │
 │   ├── cpu/
 │   │   ├── cpu.c            # CPUID hardware feature detection & vendor query
-│   │   ├── gdt.c            # 64-bit Global Descriptor Table setup
-│   │   └── gdt_flush.asm    # 64-bit GDTR reload and CS/DS refresh
+│   │   ├── gdt.c            # 64-bit GDT with Kernel & Ring 3 User segment descriptors
+│   │   ├── gdt_flush.asm    # 64-bit GDTR reload and CS/DS refresh
+│   │   ├── tss.c            # 64-bit Task State Segment (TSS) initialization & RSP0
+│   │   └── user_jump.asm    # iretq-based Ring 3 user privilege transition
 │   │
-│   └── memory/
-│       └── memory.c         # Freestanding memset, memcpy, memmove, memcmp, strlen
+│   ├── memory/
+│   │   ├── memory.c         # Freestanding memset, memcpy, memmove, memcmp, strlen
+│   │   ├── pmm.c            # Physical Memory Manager (4 KiB page frame bitmap)
+│   │   ├── heap.c           # Kernel dynamic heap (kmalloc, kfree, kcalloc, krealloc)
+│   │   └── memtest.c        # Automated PMM, VMM, and heap stress validation suite
+│   │
+│   └── process/
+│       ├── process.c        # Process control blocks (PCB), PID allocator, execution
+│       └── usertest.c       # Ring 3 security tests & privilege violation verification
 │
 ├── include/
 │   ├── types.h              # Freestanding fixed-width types (uint64_t, bool, etc.)
 │   ├── kernel.h             # Logging macros, version info, kernel_panic
 │   ├── cpu.h                # CPU capabilities and CPUID interface
-│   ├── gdt.h                # GDT constants and initialization prototype
+│   ├── gdt.h                # GDT selectors (Kernel/User Code/Data, TSS)
+│   ├── tss.h                # 64-bit TSS descriptor structure and RSP0 APIs
 │   ├── idt.h                # IDT descriptors, attributes, and gate APIs
 │   ├── interrupts.h         # Interrupt frame structure, IRQ mappings, dispatcher
 │   ├── exceptions.h         # Exception vectors, panic_with_frame prototypes
@@ -279,7 +379,14 @@ nyota-os/
 │   ├── vga.h                # VGA colors, cursor positioning, and print APIs
 │   ├── serial.h             # COM1 serial driver interface (tx/rx)
 │   ├── io.h                 # Port I/O (inb, outb, inw, outw, inl, outl)
-│   └── memory.h             # Memory and string function declarations
+│   ├── memory.h             # Memory and string function declarations
+│   ├── pmm.h                # Physical memory frame allocator definitions
+│   ├── paging.h             # 4-level paging and address space management
+│   ├── heap.h               # Dynamic heap allocator API
+│   ├── memtest.h            # Memory diagnostic and stress testing
+│   ├── syscall.h            # Syscall numbers, ABI constants, pointer validation
+│   ├── process.h            # Process structure, states, lifecycle APIs
+│   └── usertest.h           # User mode security validation test suite
 │
 ├── drivers/
 │   ├── vga.c                # 80x25 text-mode driver at 0xB8000 with scrolling
@@ -443,17 +550,23 @@ When you execute `make run`, Nyota OS boots using a **dual-output architecture**
 
 ---
 
-### 2. Interactive Console Commands (Phase 2)
+### 2. Interactive Console Commands (v0.4.0)
 
-Nyota OS v0.2.0 features a functional interactive kernel console. Both your graphical keyboard (in the QEMU window) and host terminal stdin (via serial) are active:
+Nyota OS features a functional interactive kernel console (`nyota> ` prompt). Both your graphical keyboard (in the QEMU window) and host terminal stdin (via serial) are active:
 
-| Command | Action |
-| :--- | :--- |
-| `any text` | Press <kbd>Enter</kbd> to echo back input text |
-| `uptime` | Display live system uptime calculated from 100 Hz PIT timer ticks |
-| `cpu` | Interrogate CPUID hardware vendor and architecture capabilities |
-| `clear` | Clear the VGA screen and reset hardware cursor to (0,0) |
-| `help` | List available built-in commands |
+| Command | Subsystem | Action |
+| :--- | :--- | :--- |
+| `uptime` | Phase 2 Timer | Display live system uptime calculated from 100 Hz PIT timer ticks |
+| `cpu` | Phase 1 CPUID | Interrogate CPUID hardware vendor and architecture capabilities |
+| `mem` | Phase 3 Memory | Display physical memory statistics (total/used/free frames) and heap metrics |
+| `mmap` | Phase 3 Memory | Display BIOS E820 physical memory map table |
+| `memtest` | Phase 3 Memory | Run automated memory validation suite (PMM, VMM, heap, and 100-block stress test) |
+| `crashpf` | Phase 3 Memory | Trigger a controlled kernel page fault to test architectural #PF diagnostic dump |
+| `user` | Phase 4 Processes | Spawn and execute Ring 3 user process PID 1 (`SYS_WRITE`, `SYS_GETPID`, `SYS_EXIT`) |
+| `testuser` | Phase 4 Security | Run Phase 4 user security & syscall test suite (TSS/TR, bounds, hostile pointer rejection) |
+| `viol_write`| Phase 4 Security | Spawn rogue Ring 3 process attempting to write to `0x100000`, testing hardware #PF protection |
+| `clear` | Phase 1 VGA | Clear the VGA screen and reset hardware cursor to (0,0) |
+| `help` | Console | List all available built-in commands |
 
 Line editing supports:
 - Printable ASCII characters (`A-Z`, `a-z`, `0-9`, symbols, space)
@@ -619,13 +732,14 @@ Inside GDB:
 
 ---
 
-# ⚠️ Current Limitations (Phase 3)
+# ⚠️ Current Limitations (Phase 4)
 
-Phase 3 successfully implements physical memory detection (E820), a bitmap page frame allocator (PMM), 4-level x86_64 paging (VMM), page fault diagnostics (#PF), and the kernel dynamic heap (`kmalloc`/`kfree`/`kcalloc`/`krealloc`). The following subsystems belong to subsequent phases:
+Phase 4 successfully implements hardware Ring 3 user mode execution, GDT user code/data descriptors, Task State Segment (TSS) with `RSP0` stack switching, isolated user address spaces in PML4[1], dedicated user/kernel stacks, Vector 0x80 System Call dispatcher (`SYS_WRITE`, `SYS_EXIT`, `SYS_GETPID`), strict hostile user memory validation, process abstraction (`process_t`), and graceful user-space segfault recovery. The following subsystems belong to subsequent phases:
 
-- Multitasking, Task State Segment (TSS), context switching, and scheduler are deferred to Phase 4.
-- Storage controller drivers (IDE/ATA) and Virtual File System (VFS) are deferred to Phase 5.
-- Ring 3 User Space transition, user process virtual address spaces, system calls (`syscall`/`sysret`), and userland binaries are deferred to Phase 6.
+- Preemptive multitasking, thread contexts, and round-robin scheduler are deferred to Phase 5.
+- Storage controller drivers (IDE/ATA) and Virtual File System (VFS) are deferred to Phase 6.
+- Executable and Linkable Format (ELF-64) binary loader is deferred to Phase 7.
+- Inter-Process Communication (IPC), signals, and pipes are deferred to Phase 8.
 
 ---
 
@@ -667,19 +781,34 @@ Phase 3: Memory Management                       ◄ [COMPLETED]
    ├── Free-Block Coalescing & Dynamic Heap Expansion
    └── Memory Test Suite (PMM, VMM, Heap, 100-Block Stress Test)
 
-Phase 4: Multitasking & Processes                ◄ [NEXT]
-   ├── Task State Segment (TSS)
-   ├── Context Switching
-   └── Round-Robin Cooperative/Preemptive Scheduler
+Phase 4: Processes, User Mode & System Calls     ◄ [COMPLETED]
+   ├── Hardware Ring 0 / Ring 3 Privilege Separation
+   ├── GDT User Code & Data Descriptors (0x23 / 0x1B)
+   ├── 64-bit Task State Segment (TSS, RSP0 Stack Transition)
+   ├── Isolated User Address Space (PML4[1] at 512 GB mark)
+   ├── Dedicated User Stack (0x8000010000) & Kernel Stacks
+   ├── System Call Vector 0x80 (IDT_GATE_USER_TRAP)
+   ├── System V AMD64 Syscall ABI (RAX, RDI, RSI, RDX, R10, R8)
+   ├── Syscall Dispatcher (SYS_WRITE, SYS_EXIT, SYS_GETPID)
+   ├── Hostile User Pointer Validation & copy_from_user
+   ├── Process Control Block (process_t) & PID Allocator
+   ├── Initial Ring 3 User Process Execution & Clean Exit
+   ├── Graceful User Page Fault Recovery (SIGSEGV -11)
+   └── Automated User Security & Privilege Test Suite
 
-Phase 5: Filesystem & Storage
-   ├── IDE / ATA Disk Driver
+Phase 5: Preemptive Multitasking & Scheduling   ◄ [NEXT]
+   ├── Preemptive Timer-Driven Context Switching
+   ├── Round-Robin / Priority CPU Scheduler
+   ├── Process State Machine (READY, RUNNING, BLOCKED)
+   └── Sleep / Yield Primitives
+
+Phase 6: Filesystem & Storage
+   ├── IDE / ATA Sector I/O Driver
    └── Virtual File System (VFS) & FAT32 / TAR FS
 
-Phase 6: User Space & System Calls
-   ├── Ring 3 User Mode Transition
-   ├── Syscall Interface (syscall / sysret)
-   └── Basic Userland Shell & Utilities
+Phase 7: Executable Formats & Shell
+   ├── 64-bit ELF Binary Loader
+   └── User-Space Command-Line Shell & Utilities
 ```
 
 ---

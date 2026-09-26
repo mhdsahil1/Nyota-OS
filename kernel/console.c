@@ -29,6 +29,8 @@ void console_init(void) {
 #include "pmm.h"
 #include "heap.h"
 #include "memtest.h"
+#include "process.h"
+#include "usertest.h"
 
 static void console_handle_line(const char *line) {
     if (!line || line[0] == '\0') {
@@ -75,17 +77,38 @@ static void console_handle_line(const char *line) {
         return;
     }
 
+    if (strcmp(line, "user") == 0) {
+        process_t *init_proc = process_spawn_init();
+        if (init_proc) {
+            process_run(init_proc);
+        }
+        return;
+    }
+
+    if (strcmp(line, "testuser") == 0) {
+        usertest_run_all();
+        return;
+    }
+
+    if (strcmp(line, "viol_write") == 0) {
+        usertest_trigger_kernel_write();
+        return;
+    }
+
     if (strcmp(line, "help") == 0) {
-        vga_println("Nyota OS v0.3.0 Console");
+        vga_println("Nyota OS v0.4.0 Console");
         vga_println("Built-in commands:");
-        vga_println("  uptime   - System uptime");
-        vga_println("  cpu      - CPU hardware info");
-        vga_println("  mem      - Memory usage & statistics");
-        vga_println("  mmap     - BIOS E820 physical memory map");
-        vga_println("  memtest  - Run Phase 3 memory validation suite");
-        vga_println("  crashpf  - Trigger controlled page fault test");
-        vga_println("  clear    - Clear display terminal");
-        vga_println("  help     - Show available commands");
+        vga_println("  uptime     - System uptime");
+        vga_println("  cpu        - CPU hardware info");
+        vga_println("  mem        - Memory usage & statistics");
+        vga_println("  mmap       - BIOS E820 physical memory map");
+        vga_println("  memtest    - Run Phase 3 memory validation suite");
+        vga_println("  crashpf    - Trigger controlled kernel page fault");
+        vga_println("  user       - Spawn and execute Ring 3 user process");
+        vga_println("  testuser   - Run Phase 4 user security & syscall tests");
+        vga_println("  viol_write - Test Ring 3 write violation on kernel memory");
+        vga_println("  clear      - Clear display terminal");
+        vga_println("  help       - Show available commands");
         return;
     }
 

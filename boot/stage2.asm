@@ -19,7 +19,7 @@
 
 KERNEL_TEMP_BUF   equ 0x10000   ; Temporary buffer in low memory
 KERNEL_TARGET_ADDR equ 0x100000  ; Final destination: 1 MB mark
-KERNEL_SECTOR_CNT equ 128       ; Read 128 sectors (64 KB)
+KERNEL_SECTOR_CNT equ 125       ; Read 125 sectors (62.5 KB - fits within 64 KB segment)
 KERNEL_START_LBA  equ 5         ; LBA 5 (Sector 0=boot, Sectors 1..4=stage2)
 
 stage2_entry:

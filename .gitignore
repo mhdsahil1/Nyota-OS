@@ -30,6 +30,8 @@ out/
 *.temp
 *.bak
 *~
+qemu_out.txt
+qemu_err.log
 
 # =========================
 # Editor / IDE

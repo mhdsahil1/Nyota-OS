@@ -62,13 +62,15 @@ MKIMAGE     := $(BUILD_DIR)/mkimage$(EXE_EXT)
 KERNEL_ASM_OBJS := \
     $(BUILD_DIR)/kernel_entry.o     \
     $(BUILD_DIR)/gdt_flush.o        \
-    $(BUILD_DIR)/interrupts.o
+    $(BUILD_DIR)/interrupts.o       \
+    $(BUILD_DIR)/user_jump.o
 
 KERNEL_C_OBJS := \
     $(BUILD_DIR)/kernel.o           \
     $(BUILD_DIR)/memory.o           \
     $(BUILD_DIR)/cpu.o              \
     $(BUILD_DIR)/gdt.o              \
+    $(BUILD_DIR)/tss.o              \
     $(BUILD_DIR)/vga.o              \
     $(BUILD_DIR)/serial.o           \
     $(BUILD_DIR)/idt.o              \
@@ -81,7 +83,10 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/pmm.o              \
     $(BUILD_DIR)/paging.o           \
     $(BUILD_DIR)/heap.o             \
-    $(BUILD_DIR)/memtest.o
+    $(BUILD_DIR)/memtest.o          \
+    $(BUILD_DIR)/syscall.o          \
+    $(BUILD_DIR)/process.o          \
+    $(BUILD_DIR)/usertest.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -139,6 +144,10 @@ $(BUILD_DIR)/interrupts.o: kernel/arch/x86_64/interrupts.asm | $(BUILD_DIR)
 	@echo [BUILD] kernel/arch/x86_64/interrupts.asm
 	@$(NASM) -f $(ASM_FMT) $< -o $@
 
+$(BUILD_DIR)/user_jump.o: kernel/cpu/user_jump.asm | $(BUILD_DIR)
+	@echo [BUILD] kernel/cpu/user_jump.asm
+	@$(NASM) -f $(ASM_FMT) $< -o $@
+
 # ── C Compilation ─────────────────────────────────────────────────────────────
 $(BUILD_DIR)/kernel.o: kernel/kernel.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/kernel.c
@@ -154,6 +163,10 @@ $(BUILD_DIR)/cpu.o: kernel/cpu/cpu.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/gdt.o: kernel/cpu/gdt.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/cpu/gdt.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tss.o: kernel/cpu/tss.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/cpu/tss.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/vga.o: drivers/vga.c | $(BUILD_DIR)
@@ -206,6 +219,18 @@ $(BUILD_DIR)/heap.o: kernel/memory/heap.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/memtest.o: kernel/memory/memtest.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/memory/memtest.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/syscall.o: kernel/arch/x86_64/syscall.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/syscall.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/process.o: kernel/process/process.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/process.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usertest.o: kernel/process/usertest.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/usertest.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@
 #include "kernel.h"
 #include "vga.h"
 #include "serial.h"
+#include "process.h"
 
 static const char * const exception_names[32] = {
     "Divide Error (#DE)",
@@ -142,6 +143,22 @@ static void page_fault_handler(interrupt_frame_t *frame) {
     serial_write("Cause      : "); serial_write(rsvd ? "RESERVED BIT\n" : (pk ? "PROTECTION KEY\n" : (present ? "PROTECTION VIOLATION\n" : "NOT PRESENT\n")));
     serial_write("Mode       : "); serial_write(user ? "USER\n" : "KERNEL\n");
     serial_write("========================================\n");
+
+    /* If the fault occurred in Ring 3 User Space, terminate offending process without crashing kernel */
+    if (user) {
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        vga_println("\n[SECURITY] Ring 3 User Process Page Fault (SIGSEGV)!");
+        vga_print("Fault Addr : "); vga_print_hex(cr2); vga_println("");
+        vga_print("RIP        : "); vga_print_hex(frame->rip); vga_println("");
+        vga_print("Access     : "); vga_println(fetch ? "EXECUTE" : (write ? "WRITE" : "READ"));
+        vga_print("Cause      : "); vga_println(present ? "PROTECTION VIOLATION" : "PAGE NOT PRESENT");
+        vga_println("[SECURITY] Offending user process terminated.");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+
+        interrupts_enable();
+        process_exit(-11);
+        return;
+    }
 
     /* Format on VGA */
     vga_set_color(VGA_WHITE, VGA_RED);
