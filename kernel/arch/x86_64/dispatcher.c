@@ -9,6 +9,7 @@
 #include "pic.h"
 #include "kernel.h"
 #include "vga.h"
+#include "serial.h"
 
 static interrupt_handler_t handlers[INTERRUPT_VECTOR_COUNT];
 

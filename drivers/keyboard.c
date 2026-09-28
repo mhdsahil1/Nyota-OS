@@ -209,6 +209,7 @@ bool keyboard_read_event(key_event_t *event) {
 
 #include "serial.h"
 #include "timer.h"
+#include "scheduler.h"
 #define COM1_PORT 0x3F8
 
 char keyboard_getchar(void) {
@@ -223,6 +224,9 @@ char keyboard_getchar(void) {
             char c = serial_getchar();
             if (c == '\r') c = '\n';
             return c;
+        }
+        if (scheduler_is_active()) {
+            scheduler_yield();
         }
         __asm__ volatile ("sti; hlt");
     }

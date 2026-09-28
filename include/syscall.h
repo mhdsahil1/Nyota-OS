@@ -26,6 +26,16 @@
 #define SYS_EXEC            13
 #define SYS_SPAWN           14
 #define SYS_WAITPID         15
+#define SYS_SOCKET          16
+#define SYS_BIND            17
+#define SYS_LISTEN          18
+#define SYS_ACCEPT          19
+#define SYS_CONNECT         20
+#define SYS_SEND            21
+#define SYS_RECV            22
+#define SYS_SENDTO          23
+#define SYS_RECVFROM        24
+#define SYS_SHUTDOWN        25
 
 /* Syscall Error Codes */
 #define SYS_ERR_NONE        0
@@ -44,11 +54,20 @@
 #define SYS_ERR_EINVAL      (-22)  /* Invalid argument */
 #define SYS_ERR_ENOSPC      (-28)  /* No space left on device */
 #define SYS_ERR_ENOSYS      (-38)  /* Function not implemented */
+#define SYS_ERR_ENETDOWN    (-100)
+#define SYS_ERR_ENETUNREACH (-101)
+#define SYS_ERR_ECONNRESET  (-104)
+#define SYS_ERR_ENOBUFS     (-105)
+#define SYS_ERR_ETIMEDOUT   (-110)
+#define SYS_ERR_ECONNREFUSED (-111)
+#define SYS_ERR_EHOSTUNREACH (-113)
+#define SYS_ERR_EADDRINUSE  (-115)
+#define SYS_ERR_EADDRNOTAVAIL (-116)
 
 /* Syscall Dispatcher APIs */
 void syscall_init(void);
 void syscall_handler(interrupt_frame_t *frame);
-int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5);
+int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6);
 
 /* User Memory Validation & Safe Copy */
 bool user_validate_pointer(const void *uptr, size_t len, bool write);
@@ -73,5 +92,15 @@ int64_t sys_create(const char *path, int mode);
 int64_t sys_exec(const char *path, char *const argv[]);
 int64_t sys_spawn(const char *path, char *const argv[]);
 int64_t sys_waitpid(uint32_t pid, int *status);
+int64_t sys_socket(int domain, int type, int protocol);
+int64_t sys_bind(int fd, const void *addr, size_t addrlen);
+int64_t sys_listen(int fd, int backlog);
+int64_t sys_accept(int fd, void *addr, void *addrlen);
+int64_t sys_connect(int fd, const void *addr, size_t addrlen);
+int64_t sys_send(int fd, const void *buf, size_t len, int flags);
+int64_t sys_recv(int fd, void *buf, size_t len, int flags);
+int64_t sys_sendto(int fd, const void *buf, size_t len, int flags, const void *dest, size_t addrlen);
+int64_t sys_recvfrom(int fd, void *buf, size_t len, int flags, void *src, void *addrlen);
+int64_t sys_shutdown(int fd, int how);
 
 #endif /* NYOTA_SYSCALL_H */

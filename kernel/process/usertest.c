@@ -52,7 +52,7 @@ void usertest_run_all(void) {
     /* ── Test 2: Unknown Syscall Dispatcher Handling ─────────────────────── */
     vga_print("[TEST 2/4] Invalid Syscall Number Handling... ");
 
-    int64_t ret_invalid = syscall_dispatch(9999, 0, 0, 0, 0, 0);
+    int64_t ret_invalid = syscall_dispatch(9999, 0, 0, 0, 0, 0, 0);
     if (ret_invalid != SYS_ERR_ENOSYS) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("FAIL: Did not return -ENOSYS");
@@ -67,21 +67,21 @@ void usertest_run_all(void) {
     vga_print("[TEST 3/4] Hostile Pointer Validation... ");
 
     /* Null pointer */
-    if (syscall_dispatch(SYS_WRITE, 0, 10, 0, 0, 0) != SYS_ERR_EFAULT) {
+    if (syscall_dispatch(SYS_WRITE, 0, 10, 0, 0, 0, 0) != SYS_ERR_EFAULT) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("FAIL: Null pointer not rejected");
         return;
     }
 
     /* Hostile kernel code pointer (0x100000) */
-    if (syscall_dispatch(SYS_WRITE, 0x100000, 10, 0, 0, 0) != SYS_ERR_EFAULT) {
+    if (syscall_dispatch(SYS_WRITE, 0x100000, 10, 0, 0, 0, 0) != SYS_ERR_EFAULT) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("FAIL: Kernel code pointer not rejected");
         return;
     }
 
     /* Hostile kernel heap pointer (0xFFFFFFFF90000000) */
-    if (syscall_dispatch(SYS_WRITE, 0xFFFFFFFF90000000ULL, 10, 0, 0, 0) != SYS_ERR_EFAULT) {
+    if (syscall_dispatch(SYS_WRITE, 0xFFFFFFFF90000000ULL, 10, 0, 0, 0, 0) != SYS_ERR_EFAULT) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("FAIL: Kernel heap pointer not rejected");
         return;

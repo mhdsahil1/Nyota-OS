@@ -17,9 +17,13 @@ static uint32_t timer_frequency = PIT_DEFAULT_HZ;
 
 #include "scheduler.h"
 
+extern void net_timer_tick(void);
+
 static void timer_irq_handler(interrupt_frame_t *frame) {
     (void)frame;
     timer_tick_count++;
+
+    net_timer_tick();
 
     if (scheduler_is_active()) {
         scheduler_on_timer_tick();

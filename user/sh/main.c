@@ -18,6 +18,12 @@ static void print_help(void) {
     puts("  pwd                 - Print working directory");
     puts("  clear               - Clear terminal screen");
     puts("  run <path> [args]   - Execute an ELF program from path");
+    puts("  ifconfig            - Display network interfaces");
+    puts("  ping <ip>           - Send ICMP echo requests");
+    puts("  netstat             - Display network socket status");
+    puts("  nslookup <host>     - Query DNS for hostname");
+    puts("  netcat <ip> <port>  - Connect to TCP server");
+    puts("  echo-server [port]  - Start TCP echo server");
     puts("  hello               - Run /bin/hello");
     puts("  test                - Run userspace verification test suite");
     puts("  exit                - Exit the shell");
@@ -69,14 +75,27 @@ static void cmd_cat(const char *path) {
 }
 
 static void cmd_run(const char *path, char **args) {
+    bool background = false;
+    int argc = 0;
+    while (args && args[argc]) argc++;
+
+    if (argc > 0 && strcmp(args[argc - 1], "&") == 0) {
+        background = true;
+        args[argc - 1] = NULL;
+    }
+
     int pid = spawn(path, args);
     if (pid < 0) {
         printf("error: cannot execute '%s'\n", path);
         return;
     }
 
-    int status = 0;
-    waitpid(pid, &status);
+    if (background) {
+        printf("[%d] started in background\n", pid);
+    } else {
+        int status = 0;
+        waitpid(pid, &status);
+    }
 }
 
 int main(int argc, char **argv) {

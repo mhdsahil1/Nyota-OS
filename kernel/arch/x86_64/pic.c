@@ -71,6 +71,8 @@ void pic_unmask_irq(uint8_t irq) {
     if (irq < 8) {
         port = PIC1_DATA;
     } else {
+        /* Slave PIC requires Master cascade IRQ 2 to also be unmasked */
+        pic_unmask_irq(2);
         port = PIC2_DATA;
         irq -= 8;
     }

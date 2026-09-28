@@ -13,6 +13,7 @@
 #include "kernel.h"
 #include "scheduler.h"
 #include "fs/vfs.h"
+#include "net/socket.h"
 
 /* ── User Memory Validation ───────────────────────────────────────────────── */
 
@@ -276,11 +277,164 @@ static int64_t sys_handle_waitpid(uint64_t pid, uint64_t status_uptr) {
     return res;
 }
 
+/* ── Socket System Call Handlers ─────────────────────────────────────────── */
+
+static int64_t sys_handle_socket(int domain, int type, int protocol) {
+    socket_t *sock = socket_create(domain, type, protocol);
+    if (!sock) return SYS_ERR_ENOMEM;
+
+    file_t *f = vfs_create_socket_file(sock);
+    if (!f) {
+        socket_close(sock);
+        return SYS_ERR_ENOMEM;
+    }
+
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    int fd = vfs_alloc_fd(curr->fds, f);
+    if (fd < 0) {
+        return SYS_ERR_ENOSPC;
+    }
+
+    return fd;
+}
+
+static int64_t sys_handle_bind(int fd, uint64_t addr_uptr, size_t addrlen) {
+    (void)addrlen;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    struct sockaddr_in kaddr;
+    if (copy_from_user(&kaddr, (const void *)addr_uptr, sizeof(kaddr)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    return socket_bind((socket_t *)f->filesystem_data, &kaddr);
+}
+
+static int64_t sys_handle_listen(int fd, int backlog) {
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    return socket_listen((socket_t *)f->filesystem_data, backlog);
+}
+
+static int64_t sys_handle_accept(int fd, uint64_t addr_uptr, uint64_t addrlen_uptr) {
+    (void)addrlen_uptr;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    struct sockaddr_in kaddr;
+    socket_t *client_sock = socket_accept((socket_t *)f->filesystem_data, &kaddr);
+    if (!client_sock) return SYS_ERR_EIO;
+
+    file_t *client_f = vfs_create_socket_file(client_sock);
+    if (!client_f) {
+        socket_close(client_sock);
+        return SYS_ERR_ENOMEM;
+    }
+
+    process_t *curr = process_get_current();
+    int new_fd = vfs_alloc_fd(curr->fds, client_f);
+    if (new_fd < 0) {
+        return SYS_ERR_ENOSPC;
+    }
+
+    if (addr_uptr != 0) {
+        if (user_validate_pointer((void *)addr_uptr, sizeof(kaddr), true)) {
+            copy_to_user((void *)addr_uptr, &kaddr, sizeof(kaddr));
+        }
+    }
+
+    return new_fd;
+}
+
+static int64_t sys_handle_connect(int fd, uint64_t addr_uptr, size_t addrlen) {
+    (void)addrlen;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    struct sockaddr_in kaddr;
+    if (copy_from_user(&kaddr, (const void *)addr_uptr, sizeof(kaddr)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    int ret = socket_connect((socket_t *)f->filesystem_data, &kaddr);
+    return (ret == 0) ? 0 : SYS_ERR_ECONNREFUSED;
+}
+
+static int64_t sys_handle_send(int fd, uint64_t buf_uptr, size_t len, int flags) {
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    if (!user_validate_pointer((const void *)buf_uptr, len, false)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    return socket_send((socket_t *)f->filesystem_data, (const void *)buf_uptr, len, flags);
+}
+
+static int64_t sys_handle_recv(int fd, uint64_t buf_uptr, size_t len, int flags) {
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    if (!user_validate_pointer((void *)buf_uptr, len, true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    return socket_recv((socket_t *)f->filesystem_data, (void *)buf_uptr, len, flags);
+}
+
+static int64_t sys_handle_sendto(int fd, uint64_t buf_uptr, size_t len, int flags, uint64_t dest_uptr, size_t addrlen) {
+    (void)addrlen;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    if (!user_validate_pointer((const void *)buf_uptr, len, false)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    struct sockaddr_in kdest;
+    if (copy_from_user(&kdest, (const void *)dest_uptr, sizeof(kdest)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    return socket_sendto((socket_t *)f->filesystem_data, (const void *)buf_uptr, len, flags, &kdest);
+}
+
+static int64_t sys_handle_recvfrom(int fd, uint64_t buf_uptr, size_t len, int flags, uint64_t src_uptr, uint64_t addrlen_uptr) {
+    (void)addrlen_uptr;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    if (!user_validate_pointer((void *)buf_uptr, len, true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    struct sockaddr_in ksrc;
+    int64_t ret = socket_recvfrom((socket_t *)f->filesystem_data, (void *)buf_uptr, len, flags, &ksrc);
+
+    if (ret >= 0 && src_uptr != 0) {
+        if (user_validate_pointer((void *)src_uptr, sizeof(ksrc), true)) {
+            copy_to_user((void *)src_uptr, &ksrc, sizeof(ksrc));
+        }
+    }
+
+    return ret;
+}
+
+static int64_t sys_handle_shutdown(int fd, int how) {
+    (void)how;
+    file_t *f = vfs_get_file(fd);
+    if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
+
+    return socket_close((socket_t *)f->filesystem_data);
+}
+
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
-int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
-    (void)a4; (void)a5;
-
+int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     switch (num) {
         case SYS_WRITE:    return sys_handle_write(a1, a2, a3);
         case SYS_EXIT:     return sys_handle_exit((int)a1);
@@ -298,6 +452,16 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_EXEC:     return sys_handle_exec(a1, a2);
         case SYS_SPAWN:    return sys_handle_spawn(a1, a2);
         case SYS_WAITPID:  return sys_handle_waitpid(a1, a2);
+        case SYS_SOCKET:   return sys_handle_socket((int)a1, (int)a2, (int)a3);
+        case SYS_BIND:     return sys_handle_bind((int)a1, a2, (size_t)a3);
+        case SYS_LISTEN:   return sys_handle_listen((int)a1, (int)a2);
+        case SYS_ACCEPT:   return sys_handle_accept((int)a1, a2, a3);
+        case SYS_CONNECT:  return sys_handle_connect((int)a1, a2, (size_t)a3);
+        case SYS_SEND:     return sys_handle_send((int)a1, a2, (size_t)a3, (int)a4);
+        case SYS_RECV:     return sys_handle_recv((int)a1, a2, (size_t)a3, (int)a4);
+        case SYS_SENDTO:   return sys_handle_sendto((int)a1, a2, (size_t)a3, (int)a4, a5, (size_t)a6);
+        case SYS_RECVFROM: return sys_handle_recvfrom((int)a1, a2, (size_t)a3, (int)a4, a5, a6);
+        case SYS_SHUTDOWN: return sys_handle_shutdown((int)a1, (int)a2);
         default:           return SYS_ERR_ENOSYS;
     }
 }
@@ -311,7 +475,8 @@ void syscall_handler(interrupt_frame_t *frame) {
         frame->rsi,
         frame->rdx,
         frame->r10,
-        frame->r8
+        frame->r8,
+        frame->r9
     );
 
     frame->rax = (uint64_t)ret;
@@ -558,6 +723,172 @@ int64_t sys_waitpid(uint32_t pid, int *status) {
         "mov %%rax, %0\n"
         : "=r"(ret)
         : "r"((uint64_t)pid), "r"(status)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_socket(int domain, int type, int protocol) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $16, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)domain), "r"((uint64_t)type), "r"((uint64_t)protocol)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_bind(int fd, const void *addr, size_t addrlen) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $17, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(addr), "r"(addrlen)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_listen(int fd, int backlog) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $18, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"((uint64_t)backlog)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_accept(int fd, void *addr, void *addrlen) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $19, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(addr), "r"(addrlen)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_connect(int fd, const void *addr, size_t addrlen) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $20, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(addr), "r"(addrlen)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_send(int fd, const void *buf, size_t len, int flags) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $21, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(buf), "r"(len), "r"((uint64_t)flags)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_recv(int fd, void *buf, size_t len, int flags) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $22, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(buf), "r"(len), "r"((uint64_t)flags)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_sendto(int fd, const void *buf, size_t len, int flags, const void *dest, size_t addrlen) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov %5, %%r8\n"
+        "mov %6, %%r9\n"
+        "mov $23, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(buf), "r"(len), "r"((uint64_t)flags), "r"(dest), "r"(addrlen)
+        : "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_recvfrom(int fd, void *buf, size_t len, int flags, void *src, void *addrlen) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov %5, %%r8\n"
+        "mov %6, %%r9\n"
+        "mov $24, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"(buf), "r"(len), "r"((uint64_t)flags), "r"(src), "r"(addrlen)
+        : "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_shutdown(int fd, int how) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $25, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)fd), "r"((uint64_t)how)
         : "rax", "rdi", "rsi", "rcx", "r11", "memory"
     );
     return ret;

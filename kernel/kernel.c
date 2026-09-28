@@ -29,6 +29,8 @@
 #include "fs/nyotafs.h"
 #include "fs/vfs.h"
 #include "elf/elf.h"
+#include "drivers/pci.h"
+#include "net/net.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -249,10 +251,15 @@ void kernel_main(void) {
     vga_println("ELF Loader");
     vga_println("");
 
-    /* 15. Launch First Userspace Process (/init) */
+    /* 15. PCI & Network Subsystems */
+    pci_init();
+    net_init();
+    vga_println("");
+
+    /* 16. Launch First Userspace Process (/init) */
     process_t *init_proc = process_spawn_init();
 
-    /* 16. Start Scheduler & Enter Multitasking */
+    /* 17. Start Scheduler & Enter Multitasking */
     if (init_proc) {
         process_run(init_proc);
         /* Idle kernel thread while userspace is active */

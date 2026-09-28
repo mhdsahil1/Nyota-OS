@@ -54,7 +54,8 @@ typedef enum {
     FILE_TYPE_REGULAR,
     FILE_TYPE_DIR,
     FILE_TYPE_DEV_CONSOLE,
-    FILE_TYPE_DEV_NULL
+    FILE_TYPE_DEV_NULL,
+    FILE_TYPE_SOCKET
 } file_type_t;
 
 /* File Object (Kernel open file description) */
@@ -94,6 +95,8 @@ nyota_fs_t *vfs_get_root_fs(void);
 int vfs_init_process_fds(file_t **fds);
 int vfs_alloc_fd(file_t **fds, file_t *f);
 int vfs_close_process_fds(file_t **fds);
+file_t *vfs_create_socket_file(void *sock_ptr);
+file_t *vfs_get_file(int fd);
 
 /* File Operations */
 int vfs_open(const char *path, int flags, int mode);

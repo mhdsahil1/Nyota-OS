@@ -5,6 +5,7 @@
 
 #include "fs/vfs.h"
 #include "fs/nyotafs.h"
+#include "net/socket.h"
 #include "process.h"
 #include "heap.h"
 #include "memory.h"
@@ -47,6 +48,27 @@ nyota_fs_t *vfs_get_root_fs(void) {
 
 /* ── Kernel File Object Allocator ─────────────────────────────────────────── */
 
+/* Forward declaration */
+static file_t *get_process_file(int fd);
+
+file_t *vfs_get_file(int fd) {
+    return get_process_file(fd);
+}
+
+file_t *vfs_create_socket_file(void *sock_ptr) {
+    for (size_t i = 0; i < MAX_OPEN_FILES; i++) {
+        if (global_file_table[i].ref_count == 0) {
+            memset(&global_file_table[i], 0, sizeof(file_t));
+            global_file_table[i].type = FILE_TYPE_SOCKET;
+            global_file_table[i].flags = O_RDWR;
+            global_file_table[i].filesystem_data = sock_ptr;
+            global_file_table[i].ref_count = 1;
+            return &global_file_table[i];
+        }
+    }
+    return NULL;
+}
+
 static file_t *alloc_file_object(void) {
     for (size_t i = 0; i < MAX_OPEN_FILES; i++) {
         if (global_file_table[i].ref_count == 0) {
@@ -63,6 +85,9 @@ static void free_file_object(file_t *f) {
     if (f->ref_count > 0) {
         f->ref_count--;
         if (f->ref_count == 0) {
+            if (f->type == FILE_TYPE_SOCKET && f->filesystem_data) {
+                socket_close((socket_t *)f->filesystem_data);
+            }
             memset(f, 0, sizeof(file_t));
         }
     }
@@ -260,6 +285,10 @@ int64_t vfs_read(int fd, void *buf, size_t count) {
         return (int64_t)n;
     }
 
+    if (f->type == FILE_TYPE_SOCKET) {
+        return socket_recv((socket_t *)f->filesystem_data, buf, count, 0);
+    }
+
     if (f->type == FILE_TYPE_REGULAR) {
         nyota_fs_t *fs = (nyota_fs_t *)f->filesystem_data;
         if (!fs || (uint64_t)fs < 0x100000 || (uint64_t)fs >= USER_SPACE_BASE) {
@@ -302,6 +331,10 @@ int64_t vfs_write(int fd, const void *buf, size_t count) {
             vga_putchar(src[i]);
         }
         return (int64_t)count;
+    }
+
+    if (f->type == FILE_TYPE_SOCKET) {
+        return socket_send((socket_t *)f->filesystem_data, buf, count, 0);
     }
 
     if (f->type == FILE_TYPE_REGULAR) {
@@ -395,9 +428,9 @@ int vfs_fstat(int fd, vfs_stat_t *st) {
     file_t *f = get_process_file(fd);
     if (!f) return NYOTA_EBADF;
 
-    if (f->type == FILE_TYPE_DEV_CONSOLE || f->type == FILE_TYPE_DEV_NULL) {
+    if (f->type == FILE_TYPE_DEV_CONSOLE || f->type == FILE_TYPE_DEV_NULL || f->type == FILE_TYPE_SOCKET) {
         st->inode = 0;
-        st->mode = NYOTA_MODE_DEV | 0666;
+        st->mode = (f->type == FILE_TYPE_SOCKET ? 0140666 : (NYOTA_MODE_DEV | 0666));
         st->size = 0;
         st->uid = 0;
         st->gid = 0;

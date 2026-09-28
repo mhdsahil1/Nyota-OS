@@ -66,7 +66,7 @@ void schedtest_run_all(void) {
     vga_print("[TEST 3/4] Syscall Dispatch Table... ");
 
     /* Check that unknown syscall is rejected */
-    if (syscall_dispatch(8888, 0, 0, 0, 0, 0) != SYS_ERR_ENOSYS) {
+    if (syscall_dispatch(8888, 0, 0, 0, 0, 0, 0) != SYS_ERR_ENOSYS) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         vga_println("FAIL: Unknown syscall did not return -ENOSYS");
         return;

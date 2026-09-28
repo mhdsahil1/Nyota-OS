@@ -56,6 +56,38 @@ static inline int64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t 
     return (int64_t)r_rax;
 }
 
+static inline int64_t syscall4(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+    register uint64_t r_rax __asm__("rax") = num;
+    register uint64_t r_rdi __asm__("rdi") = a1;
+    register uint64_t r_rsi __asm__("rsi") = a2;
+    register uint64_t r_rdx __asm__("rdx") = a3;
+    register uint64_t r_r10 __asm__("r10") = a4;
+    __asm__ volatile (
+        "int $0x80"
+        : "+r"(r_rax)
+        : "r"(r_rdi), "r"(r_rsi), "r"(r_rdx), "r"(r_r10)
+        : "rcx", "r11", "memory"
+    );
+    return (int64_t)r_rax;
+}
+
+static inline int64_t syscall6(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    register uint64_t r_rax __asm__("rax") = num;
+    register uint64_t r_rdi __asm__("rdi") = a1;
+    register uint64_t r_rsi __asm__("rsi") = a2;
+    register uint64_t r_rdx __asm__("rdx") = a3;
+    register uint64_t r_r10 __asm__("r10") = a4;
+    register uint64_t r_r8  __asm__("r8")  = a5;
+    register uint64_t r_r9  __asm__("r9")  = a6;
+    __asm__ volatile (
+        "int $0x80"
+        : "+r"(r_rax)
+        : "r"(r_rdi), "r"(r_rsi), "r"(r_rdx), "r"(r_r10), "r"(r_r8), "r"(r_r9)
+        : "rcx", "r11", "memory"
+    );
+    return (int64_t)r_rax;
+}
+
 int64_t write(int fd, const void *buf, size_t count) {
     return syscall3(0, (uint64_t)fd, (uint64_t)buf, (uint64_t)count);
 }
@@ -123,4 +155,97 @@ int waitpid(int pid, int *status) {
         }
         sleep(50);
     }
+}
+
+int socket(int domain, int type, int protocol) {
+    return (int)syscall3(16, (uint64_t)domain, (uint64_t)type, (uint64_t)protocol);
+}
+
+int bind(int fd, const struct sockaddr *addr, size_t addrlen) {
+    return (int)syscall3(17, (uint64_t)fd, (uint64_t)addr, addrlen);
+}
+
+int listen(int fd, int backlog) {
+    return (int)syscall2(18, (uint64_t)fd, (uint64_t)backlog);
+}
+
+int accept(int fd, struct sockaddr *addr, size_t *addrlen) {
+    return (int)syscall3(19, (uint64_t)fd, (uint64_t)addr, (uint64_t)addrlen);
+}
+
+int connect(int fd, const struct sockaddr *addr, size_t addrlen) {
+    return (int)syscall3(20, (uint64_t)fd, (uint64_t)addr, addrlen);
+}
+
+int64_t send(int fd, const void *buf, size_t len, int flags) {
+    return syscall4(21, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags);
+}
+
+int64_t recv(int fd, void *buf, size_t len, int flags) {
+    return syscall4(22, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags);
+}
+
+int64_t sendto(int fd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, size_t addrlen) {
+    return syscall6(23, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags, (uint64_t)dest_addr, addrlen);
+}
+
+int64_t recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *src_addr, size_t *addrlen) {
+    return syscall6(24, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags, (uint64_t)src_addr, (uint64_t)addrlen);
+}
+
+int shutdown(int fd, int how) {
+    return (int)syscall2(25, (uint64_t)fd, (uint64_t)how);
+}
+
+uint32_t inet_addr(const char *cp) {
+    if (!cp) return 0;
+    uint32_t parts[4] = {0};
+    int idx = 0;
+
+    while (*cp && idx < 4) {
+        if (*cp >= '0' && *cp <= '9') {
+            parts[idx] = parts[idx] * 10 + (*cp - '0');
+        } else if (*cp == '.') {
+            idx++;
+        } else {
+            break;
+        }
+        cp++;
+    }
+
+    if (idx != 3) return 0;
+
+    return ((parts[0] & 0xFF) |
+           ((parts[1] & 0xFF) << 8) |
+           ((parts[2] & 0xFF) << 16) |
+           ((parts[3] & 0xFF) << 24));
+}
+
+static char inet_ntoa_buf[32];
+
+char *inet_ntoa(struct in_addr in) {
+    uint32_t ip = in.s_addr;
+    uint8_t b1 = ip & 0xFF;
+    uint8_t b2 = (ip >> 8) & 0xFF;
+    uint8_t b3 = (ip >> 16) & 0xFF;
+    uint8_t b4 = (ip >> 24) & 0xFF;
+
+    char *p = inet_ntoa_buf;
+    uint8_t bytes[4] = {b1, b2, b3, b4};
+    for (int i = 0; i < 4; i++) {
+        uint8_t val = bytes[i];
+        if (val >= 100) {
+            *p++ = (char)('0' + (val / 100));
+            *p++ = (char)('0' + ((val / 10) % 10));
+            *p++ = (char)('0' + (val % 10));
+        } else if (val >= 10) {
+            *p++ = (char)('0' + (val / 10));
+            *p++ = (char)('0' + (val % 10));
+        } else {
+            *p++ = (char)('0' + val);
+        }
+        if (i < 3) *p++ = '.';
+    }
+    *p = '\0';
+    return inet_ntoa_buf;
 }

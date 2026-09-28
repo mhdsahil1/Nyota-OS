@@ -118,7 +118,20 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/ata.o              \
     $(BUILD_DIR)/nyotafs.o          \
     $(BUILD_DIR)/vfs.o              \
-    $(BUILD_DIR)/elf.o
+    $(BUILD_DIR)/elf.o              \
+    $(BUILD_DIR)/pci.o              \
+    $(BUILD_DIR)/e1000.o            \
+    $(BUILD_DIR)/netdev.o           \
+    $(BUILD_DIR)/net.o              \
+    $(BUILD_DIR)/packet.o           \
+    $(BUILD_DIR)/ethernet.o         \
+    $(BUILD_DIR)/arp.o              \
+    $(BUILD_DIR)/ipv4.o             \
+    $(BUILD_DIR)/route.o            \
+    $(BUILD_DIR)/icmp.o             \
+    $(BUILD_DIR)/udp.o              \
+    $(BUILD_DIR)/tcp.o              \
+    $(BUILD_DIR)/socket.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -133,10 +146,17 @@ USER_BINARIES := \
     fs/root/bin/ls       \
     fs/root/bin/cat      \
     fs/root/bin/ps       \
-    fs/root/bin/test
+    fs/root/bin/test     \
+    fs/root/bin/ifconfig \
+    fs/root/bin/ping     \
+    fs/root/bin/netstat  \
+    fs/root/bin/nslookup \
+    fs/root/bin/netcat   \
+    fs/root/bin/echo-server
 
-# ── QEMU Drive Flags (Primary: Boot disk, Secondary: NyotaFS Data disk) ───────
+# ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
+QEMU_NET_FLAGS   := -netdev user,id=net0,hostfwd=tcp::8080-:8080 -device e1000,netdev=net0
 
 # ── Phony Targets ─────────────────────────────────────────────────────────────
 .PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help user fs disk
@@ -360,32 +380,84 @@ $(BUILD_DIR)/elf.o: kernel/elf/elf.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/elf/elf.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/pci.o: kernel/drivers/pci/pci.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/drivers/pci/pci.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/e1000.o: kernel/drivers/net/e1000.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/drivers/net/e1000.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/netdev.o: kernel/net/netdev.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/netdev.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net.o: kernel/net/net.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/net.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/packet.o: kernel/net/packet.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/packet.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ethernet.o: kernel/net/ethernet.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/ethernet.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/arp.o: kernel/net/arp.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/arp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ipv4.o: kernel/net/ipv4.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/ipv4.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/route.o: kernel/net/route.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/route.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/icmp.o: kernel/net/icmp.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/icmp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/udp.o: kernel/net/udp.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/udp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tcp.o: kernel/net/tcp.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/tcp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/socket.o: kernel/net/socket.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/socket.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 # ── Build Directory ───────────────────────────────────────────────────────────
 $(BUILD_DIR):
 	@$(MKDIR_CMD)
 
 # ── Run in QEMU ───────────────────────────────────────────────────────────────
 run: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -serial stdio
 
 # Run in QEMU with serial output piped to terminal without popup window
 run-serial: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run scheduler / multitasking tests
 scheduler-test: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 stress-test: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run automated memory test runner
 memtest: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run with GDB server attached (waits on port 1234)
 run-debug: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) -s -S -serial stdio
+	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -s -S -serial stdio
 
 debug: CFLAGS += -g
 debug: all

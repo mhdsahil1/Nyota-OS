@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-6%3A%20Filesystem%2C%20ELF%20Loader%20%26%20Real%20Userland-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.6.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-7%3A%20Networking%2C%20TCP%2FIP%20%26%20Sockets-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.7.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-7-overview-networking-tcpip--sockets">Phase 7 Overview</a>
+  ·
   <a href="#-phase-6-overview-filesystem-elf-loader--real-userland">Phase 6 Overview</a>
   ·
   <a href="#-phase-5-overview-multitasking-scheduler--process-management">Phase 5 Overview</a>
@@ -59,6 +61,136 @@
 > Every subsystem added to Nyota should have a clear interface, a testable implementation, and a reason to exist.
 > The goal isn't to make Nyota look like an operating system.
 > **The goal is to make Nyota actually behave like one.**
+
+---
+
+# 🌐 Phase 7 Overview: Networking, TCP/IP & Sockets
+
+**Current Status:** **Phase 7 — Networking, TCP/IP & Sockets** (Completed)
+
+Phase 7 delivers a complete, modular, and standards-compliant networking subsystem that enables Nyota OS to communicate over virtual Ethernet networks and with the outside world. From hardware discovery of PCI network adapters through an Intel 82540EM (E1000) driver, to an RFC-compliant protocol stack (Ethernet II, ARP, IPv4, ICMP, UDP, TCP) and a full BSD-style Socket API integrated into the VFS and preemptive scheduler:
+
+```text
+                    User Applications (/bin/ping, /bin/netcat, /bin/echo-server, etc.)
+                                           │
+                                           ▼
+                                      Socket API
+                           (libnyota: socket, bind, listen, ...)
+                                           │
+                                           ▼
+                                    Network Syscalls
+                              (SYS_SOCKET..SYS_SHUTDOWN)
+                                           │
+                                           ▼
+                                      Socket Layer
+                               (wait queues, circular FIFO)
+                                           │
+                              ┌────────────┼────────────┐
+                              ▼            ▼            ▼
+                             TCP          UDP          ICMP
+                              │            │            │
+                              └───────┬────┴────────────┘
+                                      ▼
+                                     IPv4
+                              (Checksums, Routing)
+                                      │
+                         ┌────────────┴────────────┐
+                         ▼                         ▼
+                        ARP                     Loopback
+                  (Cache, Request/Reply)       (127.0.0.1)
+                         │
+                         ▼
+                      Ethernet
+                  (Ethernet II Frames)
+                         │
+                         ▼
+                     NIC Driver
+                 (Intel 82540EM / E1000)
+                         │
+                         ▼
+                    QEMU / SLIRP
+             (10.0.2.15 -> Gateway 10.0.2.2)
+                         │
+                         ▼
+                    Host Network
+```
+
+---
+
+### Key Subsystems Delivered in Phase 7:
+
+1. **PCI Bus Subsystem & Enumeration (`kernel/drivers/pci/pci.c`)**:
+   - Accesses standard PCI configuration space via I/O ports `0xCF8` (Address) and `0xCFC` (Data).
+   - Recursively enumerates buses, device slots, and functions, extracting Vendor ID, Device ID, Class, Subclass, and Base Address Registers (BARs).
+   - Detects the Intel 82540EM Gigabit Ethernet Controller (`0x8086:0x100E`, Class `0x02:0x00`), locating its 128 KiB Memory-Mapped I/O BAR0 (`0xFEBC0000`) and assigned interrupt line (IRQ 11).
+
+2. **Intel 82540EM (E1000) Gigabit NIC Driver (`kernel/drivers/net/e1000.c`)**:
+   - **MMIO Access**: Maps BAR0 into kernel virtual memory using 4-level paging (`paging_map_page()`) to access device control, status, and descriptor ring registers.
+   - **Physical DMA Descriptor Rings**:
+     - Allocates physical frames via `pmm_alloc_page()` to ensure physical-address DMA safety.
+     - Sets up 32 Receive descriptors (`e1000_rx_desc_t`) and 8 Transmit descriptors (`e1000_tx_desc_t`).
+     - Configures receive control (`RCTL`: Broadcast accept, 2048-byte buffer size, strip CRC) and transmit control (`TCTL`: Enable, Pad short packets, Collision threshold 15, Collision distance 64).
+   - **MAC Address Retrieval**: Reads factory MAC `52:54:00:12:34:56` directly from EEPROM registers and programs the Receive Address Filter (`RAL[0]` / `RAH[0]`).
+   - **Dual-Mode Packet Reception**: Interrupt-driven handling on IRQ 11 (`dispatcher_register_handler(IRQ_TO_VECTOR(11), e1000_irq_handler)`) paired with deferred worker polling (`e1000_poll_rx()`) ensuring zero packet loss during heavy socket traffic.
+
+3. **Packet Buffer Architecture (`packet_t`, `kernel/net/packet.c`)**:
+   - Flexible packet abstraction with reserved headroom and tailroom.
+   - Dynamic encapsulation/decapsulation primitives: `packet_alloc()`, `packet_free()`, `packet_push_header()`, and `packet_pull_header()`.
+   - Strict bounds validation preventing buffer overruns or malformed packet panics.
+
+4. **Ethernet II Layer & Network Device Model (`kernel/net/ethernet.c`, `kernel/net/netdev.c`)**:
+   - Universal network device interface (`net_device_t`) abstracting physical Ethernet (`eth0` at `10.0.2.15`, MTU 1500) and virtual loopback (`lo` at `127.0.0.1`, MTU 65536).
+   - Ethernet II frame encapsulation, EtherType demultiplexing (`0x0800` IPv4, `0x0806` ARP), and frame validation (length, destination MAC, source MAC).
+
+5. **Dynamic ARP (Address Resolution Protocol, `kernel/net/arp.c`)**:
+   - Implements RFC 826 ARP requests and replies.
+   - Dynamic ARP Cache storing IPv4-to-MAC associations with automated query broadcast, cache updates, and entry timeouts.
+   - Transparent resolution for outgoing IPv4 packets destined for local subnet hosts.
+
+6. **IPv4 & Routing Subsystem (`kernel/net/ipv4.c`, `kernel/net/route.c`)**:
+   - RFC 791 IPv4 parser and transmitter with RFC 1071 16-bit one's complement checksum calculation and verification.
+   - Protocol dispatching: `1` (ICMP), `6` (TCP), `17` (UDP).
+   - Longest-prefix-match routing table with route addition and lookup (`route_lookup()`):
+     - `127.0.0.0/8` -> `lo` (127.0.0.1)
+     - `10.0.2.0/24` -> `eth0` (local subnet)
+     - `0.0.0.0/0` -> Gateway `10.0.2.2` via `eth0`
+
+7. **ICMP Diagnostics & Echo Engine (`kernel/net/icmp.c`)**:
+   - Implements ICMP Echo Request (`Type 8`) and Echo Reply (`Type 0`) with checksum verification.
+   - Automatic kernel Echo Reply generation for incoming pings.
+   - Raw ICMP socket support enabling userspace diagnostic utilities (`/bin/ping`).
+
+8. **User Datagram Protocol (UDP, `kernel/net/udp.c`)**:
+   - RFC 768 UDP header construction, parsing, and IPv4 pseudo-header checksum validation.
+   - Port multiplexing delivering incoming datagrams into per-socket FIFO buffers.
+   - Supports connectionless messaging for applications such as DNS (`nslookup`).
+
+9. **RFC 793 TCP Engine & State Machine (`kernel/net/tcp.c`)**:
+   - Explicit connection state machine: `CLOSED`, `LISTEN`, `SYN_SENT`, `SYN_RECEIVED`, `ESTABLISHED`, `FIN_WAIT_1`, `FIN_WAIT_2`, `CLOSE_WAIT`, `LAST_ACK`, `TIME_WAIT`.
+   - Full 3-way handshake: Client `SYN` -> Server `SYN+ACK` -> Client `ACK`.
+   - Bidirectional stream transfer with sequence numbering, acknowledgment tracking, receive window flow control (`8192` bytes advertised), and PSH flag propagation.
+   - Graceful termination via `FIN`/`ACK` sequences and immediate `RST` generation for invalid packets or unopened ports.
+   - Checksum calculation with RFC 793 pseudo-header and QEMU SLIRP checksum-offload tolerance.
+
+10. **BSD Socket Abstraction & VFS Integration (`kernel/net/socket.c`, `kernel/fs/vfs.c`)**:
+    - Sockets implemented as first-class kernel objects (`socket_t`) and exposed through standard VFS file descriptors as `FILE_TYPE_SOCKET`.
+    - Ten new network system calls (Vectors 16..25):
+      - `SYS_SOCKET` (16), `SYS_BIND` (17), `SYS_LISTEN` (18), `SYS_ACCEPT` (19), `SYS_CONNECT` (20), `SYS_SEND` (21), `SYS_RECV` (22), `SYS_SENDTO` (23), `SYS_RECVFROM` (24), `SYS_SHUTDOWN` (25).
+    - Circular FIFO buffering (`SOCKET_BUFFER_SIZE = 8192`) preventing unbounded memory growth.
+    - Sockets transparently integrate with `vfs_read()` and `vfs_write()` for standard stream redirection.
+
+11. **Non-Spinning Process Sleeping & Network Wait Queues**:
+    - Complete integration with the Phase 5 preemptive scheduler.
+    - Blocking network calls (`accept()`, `recv()`, `connect()`) transition the calling process to `PROCESS_SLEEPING` and enroll it in the socket's wait queue.
+    - Incoming packet processing immediately wakes sleeping tasks to `PROCESS_READY`, eliminating CPU-wasting spin loops.
+
+12. **Real Userspace Network Utilities & Services**:
+    - **`/bin/ifconfig`**: Displays network interface hardware and IP configuration, netmask, broadcast, and MTU.
+    - **`/bin/ping`**: Network latency diagnostic tool measuring round-trip times over both loopback and QEMU gateway.
+    - **`/bin/netstat`**: Network status tool enumerating active TCP, UDP, and RAW sockets.
+    - **`/bin/nslookup`**: DNS resolution tool querying gateway DNS (`10.0.2.3:53`) over UDP for IPv4 `A` records.
+    - **`/bin/netcat`**: Interactive TCP stream client for connecting to arbitrary hosts and ports.
+    - **`/bin/echo-server`**: Ring 3 TCP echo daemon listening on port `8080`, supporting simultaneous internal and host connections.
 
 ---
 
@@ -551,7 +683,7 @@ nyota-os/
 │   │       ├── exceptions.c # CPU exception handlers (0..31) & page fault diagnostics
 │   │       ├── pic.c        # 8259 PIC initialization, IRQ remapping, EOI
 │   │       ├── paging.c     # 4-level paging (PML4, PDPT, PD, PT), map/unmap, VMM
-│   │       └── syscall.c    # Vector 0x80 syscall dispatcher & pointer validation
+│   │       └── syscall.c    # Vector 0x80 syscall dispatcher (26 syscalls, vectors 0..25)
 │   │
 │   ├── cpu/
 │   │   ├── cpu.c            # CPUID hardware feature detection & vendor query
@@ -566,9 +698,39 @@ nyota-os/
 │   │   ├── heap.c           # Kernel dynamic heap (kmalloc, kfree, kcalloc, krealloc)
 │   │   └── memtest.c        # Automated PMM, VMM, and heap stress validation suite
 │   │
-│   └── process/
-│       ├── process.c        # Process control blocks (PCB), PID allocator, execution
-│       └── usertest.c       # Ring 3 security tests & privilege violation verification
+│   ├── process/
+│   │   ├── process.c        # Process control blocks (PCB), PID allocator, execution
+│   │   ├── scheduler.c      # Preemptive round-robin scheduler & time-slice preemption
+│   │   └── usertest.c       # Ring 3 security tests & privilege violation verification
+│   │
+│   ├── storage/
+│   │   ├── ata.c            # ATA PIO disk controller driver (LBA28 read/write)
+│   │   └── block.c          # Generic block device abstraction
+│   │
+│   ├── fs/
+│   │   ├── nyotafs.c        # Native filesystem implementation (inodes, extents, dirs)
+│   │   └── vfs.c            # Virtual filesystem (open, read, write, close, sockets)
+│   │
+│   ├── elf/
+│   │   └── elf.c            # Freestanding 64-bit ELF executable parser & segment loader
+│   │
+│   ├── drivers/
+│   │   ├── pci/
+│   │   │   └── pci.c        # PCI configuration space enumeration & device discovery
+│   │   └── net/
+│   │       └── e1000.c      # Intel 82540EM Gigabit Ethernet NIC driver (MMIO, DMA rings)
+│   │
+│   └── net/
+│       ├── netdev.c         # Universal network device layer (eth0, lo)
+│       ├── packet.c         # Dynamic packet buffer management (headroom/tailroom)
+│       ├── ethernet.c       # Ethernet II frame parser and serializer
+│       ├── arp.c            # Dynamic ARP request/reply and cache management
+│       ├── ipv4.c           # IPv4 packet processor & RFC 1071 internet checksum
+│       ├── route.c          # Longest-prefix-match IP routing table
+│       ├── icmp.c           # ICMP Echo Request and Echo Reply engine
+│       ├── udp.c            # UDP header processing, checksum, and port multiplexing
+│       ├── tcp.c            # RFC 793 TCP state machine (handshake, sequence, close)
+│       └── socket.c         # BSD Socket abstraction, circular FIFO, and wait queues
 │
 ├── include/
 │   ├── types.h              # Freestanding fixed-width types (uint64_t, bool, etc.)
@@ -591,20 +753,41 @@ nyota-os/
 │   ├── paging.h             # 4-level paging and address space management
 │   ├── heap.h               # Dynamic heap allocator API
 │   ├── memtest.h            # Memory diagnostic and stress testing
-│   ├── syscall.h            # Syscall numbers, ABI constants, pointer validation
+│   ├── syscall.h            # Syscall numbers (0..25), ABI constants, pointer validation
 │   ├── process.h            # Process structure, states, lifecycle APIs
-│   └── usertest.h           # User mode security validation test suite
+│   ├── storage/             # Block device and ATA driver headers
+│   ├── fs/                  # NyotaFS and VFS layer headers
+│   ├── elf/                 # ELF64 header structures and loader prototypes
+│   ├── drivers/             # PCI and Intel E1000 NIC driver headers
+│   └── net/                 # Protocol headers (ethernet, arp, ipv4, icmp, udp, tcp, socket)
 │
-├── drivers/
-│   ├── vga.c                # 80x25 text-mode driver at 0xB8000 with scrolling
-│   ├── serial.c             # 16550 UART serial driver (115200 8N1 tx/rx)
-│   ├── timer.c              # 8254 PIT driver (100 Hz, uptime tracking, sleep)
-│   └── keyboard.c           # PS/2 keyboard driver, scancode decoder, ring buffer
+├── user/
+│   ├── libnyota/            # Ring 3 C library (crt0, syscalls, sockets, stdio, string)
+│   ├── init/                # System init process (PID 1)
+│   ├── sh/                  # Interactive user command shell
+│   ├── hello/               # Hello world user program
+│   ├── echo/                # Argument echoing utility
+│   ├── ls/                  # Directory listing utility
+│   ├── cat/                 # File concatenation and viewing utility
+│   ├── ps/                  # Active process status utility
+│   ├── test/                # Ring 3 automated verification suite
+│   ├── ifconfig/            # Network interface configuration utility
+│   ├── ping/                # ICMP Echo round-trip diagnostic tool
+│   ├── netstat/             # Active socket and protocol table inspector
+│   ├── nslookup/            # UDP DNS address resolution utility
+│   ├── netcat/              # Interactive TCP stream client
+│   └── echo-server/         # Concurrent TCP echo daemon on port 8080
 │
 ├── tools/
-│   └── mkimage.c            # Cross-platform disk image builder (creates nyota.img)
+│   ├── mkimage.c            # Cross-platform bootable disk image generator
+│   ├── mknyotafs.c          # Host tool creating NyotaFS filesystem images
+│   ├── test_runner.py       # Automated QEMU userspace test suite
+│   ├── test_network.py      # Automated network verification test suite
+│   ├── test_internal_tcp.py # Internal loopback TCP echo server/client test
+│   └── test_tcp.py          # Host-to-guest external TCP connection test
 │
 ├── linker.ld                # 64-bit kernel linker script (load address 0x100000)
+├── user.ld                  # Ring 3 user ELF linker script (virtual load 0x400000)
 ├── Makefile                 # Reproducible build system
 └── README.md                # Project documentation
 ```
@@ -702,7 +885,7 @@ make run-serial
               NYOTA OS                  
 ========================================
 
-Kernel       : v0.2.0
+Kernel       : v0.7.0
 Architecture : x86_64
 
 [ OK ] GDT
@@ -713,29 +896,90 @@ Architecture : x86_64
 [ OK ] Keyboard
 [ OK ] Interrupts
 
-Uptime: 00:00:00
+[ OK ] Memory
+[ OK ] Paging
+[ OK ] Kernel Heap
+[ OK ] TSS
+[ OK ] User Segments
+[ OK ] Syscalls
 
-nyota> hello nyota
-hello nyota
+[ OK ] Scheduler
+[INFO]  Initializing storage
+[ OK ]  ATA controller detected
+[ OK ]  Disk detected (Primary Master: QEMU HARDDISK)
+[INFO]  Sector size: 512
+[INFO]  Disk sectors: 2880
+[ OK ]  Disk detected (Primary Slave: QEMU HARDDISK)
+[INFO]  Sector size: 512
+[INFO]  Disk sectors: 32768
+[ OK ] Storage
+[INFO]  Mounting root filesystem
+[FS]    Mounting NyotaFS
+[ OK ]  NyotaFS valid (total blocks: 16384)
+[FS]    Root inode: 1
+[ OK ]  / mounted
+[ OK ] NyotaFS
+[ OK ] VFS
+[ OK ] ELF Loader
 
-nyota> uptime
-Uptime: 00:00:15
+[PCI] 0x0000000000000000:0x0000000000000003.0 Device [0x0000000000008086:0x000000000000100E] Class 0x0000000000000002:0x0000000000000000 IRQ 11 BAR0: 0x00000000FEBC0000
+[ OK ] PCI (6 devices)
+[NET] Registered interface: lo
+[ OK ] ARP
+[ OK ] IPv4
+[ OK ] ICMP
+[ OK ] UDP
+[ OK ] TCP
+[ OK ] Sockets
+[NET] Registered interface: eth0
+[ OK ] E1000
+[E1000] Initialized eth0 MAC: 52:54:00:12:34:56 IRQ: 11
+[INFO]  eth0
+[INFO]  MAC: 52:54:00:12:34:56
+[INFO]  IP:  10.0.2.15
+[INFO]  Gateway: 10.0.2.2
 
-nyota> cpu
-CPU Information
--------------------------
-Vendor   : AuthenticAMD
-Mode     : x86_64
-Features :
-  SSE
-  SSE2
-  SSE3
-  APIC
-  PAE
-  Long Mode (x86_64)
-  NX (No-Execute)
+[INFO]  Loading /init
+[ OK ]  ELF loaded
+[ OK ]  PID 1 started
 
-nyota> 
+========================================
+          NYOTA OS INIT (PID 1)         
+========================================
+[INIT] System initialization complete.
+[INIT] Starting userspace interactive shell (/bin/sh)...
+
+nyota$ ifconfig
+eth0: flags=UP,BROADCAST,RUNNING
+      ether 52:54:00:12:34:56
+      inet 10.0.2.15  netmask 255.255.255.0  broadcast 10.0.2.255
+      gateway 10.0.2.2  dns 10.0.2.3
+      mtu 1500
+
+lo:   flags=UP,LOOPBACK,RUNNING
+      inet 127.0.0.1  netmask 255.0.0.0
+      mtu 65536
+
+nyota$ ping 10.0.2.2
+PING 10.0.2.2 (10.0.2.2): 56 data bytes
+64 bytes from 10.0.2.2: icmp_seq=1 time=2 ms
+64 bytes from 10.0.2.2: icmp_seq=2 time=1 ms
+64 bytes from 10.0.2.2: icmp_seq=3 time=2 ms
+64 bytes from 10.0.2.2: icmp_seq=4 time=1 ms
+
+--- 10.0.2.2 ping statistics ---
+4 packets transmitted, 4 packets received, 0% packet loss
+
+nyota$ echo-server 8080 &
+[5] started in background
+nyota$ Listening on 0.0.0.0:8080...
+
+nyota$ netcat 127.0.0.1 8080 HelloFromNyota
+Connecting to 127.0.0.1:8080...
+Client connected from 127.0.0.1:49152
+Connected to 127.0.0.1:8080!
+Received: HelloFromNyota
+Client disconnected.
 ```
 
 ---
@@ -943,14 +1187,13 @@ Inside GDB:
 
 ---
 
-# ⚠️ Current Limitations (Phase 4)
+# ⚠️ Current Limitations (Phase 7)
 
-Phase 4 successfully implements hardware Ring 3 user mode execution, GDT user code/data descriptors, Task State Segment (TSS) with `RSP0` stack switching, isolated user address spaces in PML4[1], dedicated user/kernel stacks, Vector 0x80 System Call dispatcher (`SYS_WRITE`, `SYS_EXIT`, `SYS_GETPID`), strict hostile user memory validation, process abstraction (`process_t`), and graceful user-space segfault recovery. The following subsystems belong to subsequent phases:
+Phase 7 successfully implements a complete networking subsystem including PCI discovery, Intel 82540EM (E1000) Gigabit NIC driver with physical DMA descriptor rings, Ethernet II frames, dynamic ARP, IPv4 routing, ICMP echo replies, UDP datagrams, RFC 793 TCP state machine (3-way handshake, windowing, ACK/FIN/RST), BSD socket abstraction, 10 network system calls (Vectors 16..25), scheduler wait-queue sleep/wakeup integration, and full Ring 3 networking utilities (`ifconfig`, `ping`, `netstat`, `nslookup`, `netcat`, `echo-server`). The following subsystems belong to subsequent phases:
 
-- Preemptive multitasking, thread contexts, and round-robin scheduler are deferred to Phase 5.
-- Storage controller drivers (IDE/ATA) and Virtual File System (VFS) are deferred to Phase 6.
-- Executable and Linkable Format (ELF-64) binary loader is deferred to Phase 7.
-- Inter-Process Communication (IPC), signals, and pipes are deferred to Phase 8.
+- Inter-Process Communication (IPC), anonymous and named pipes (`pipe`), and standard stream redirection (`|`) are deferred to Phase 8.
+- POSIX-style signals (`SIGINT`, `SIGKILL`, `SIGCHLD`, `signal`, `kill`) are deferred to Phase 8.
+- Advanced socket options (`SO_REUSEADDR`, `TCP_NODELAY`), DHCP, and IPv6 are deferred to future extensions.
 
 ---
 
@@ -1038,10 +1281,29 @@ Phase 6: Filesystem, ELF Loader & Real Userland  ◄ [COMPLETED]
    ├── Userspace Utilities (/bin/hello, /bin/echo, /bin/ls, /bin/cat, /bin/ps, /bin/test)
    └── Strict User Memory Validation (user_validate_pointer, copy_from/to_user, safe EFAULT)
 
-Phase 7: IPC, Pipes & Process Control            ◄ [NEXT]
+Phase 7: Networking, TCP/IP & Sockets            ◄ [COMPLETED]
+   ├── PCI Bus Subsystem & Enumeration (Config space 0xCF8/0xCFC)
+   ├── Intel 82540EM (E1000) Gigabit NIC Driver (MMIO BAR0, IRQ 11)
+   ├── Physical DMA Circular Descriptor Rings (32 RX / 8 TX descriptors)
+   ├── Hardware MAC Retrieval & Filtering (52:54:00:12:34:56)
+   ├── Network Device Abstraction (net_device_t: eth0, lo)
+   ├── Dynamic Packet Buffer Architecture (packet_t headroom/tailroom)
+   ├── Ethernet II Frame Processing & EtherType Demultiplexing
+   ├── Dynamic ARP Subsystem (RFC 826 Request/Reply & Cache Management)
+   ├── IPv4 Layer & RFC 1071 Internet Checksum Engine
+   ├── Longest-Prefix Routing Table (127.0.0.0/8, 10.0.2.0/24, 0.0.0.0/0)
+   ├── ICMP Echo Request & Reply Processing (/bin/ping)
+   ├── User Datagram Protocol (UDP) & DNS Client (/bin/nslookup)
+   ├── RFC 793 TCP State Machine (Handshake, Windowing, ACK/FIN/RST)
+   ├── BSD Socket Architecture (socket_t, Circular FIFO Buffers)
+   ├── 10 Network Syscalls (SYS_SOCKET..SYS_SHUTDOWN) & VFS Integration
+   ├── Preemptive Scheduler Wait Queues & Non-Spinning Process Sleeping
+   └── Ring 3 Network Utilities (ifconfig, ping, netstat, nslookup, netcat, echo-server)
+
+Phase 8: IPC, Pipes & Process Control            ◄ [NEXT]
    ├── Anonymous & Named Pipes
-   ├── Standard Stream Redirection & Piping (|)
-   └── Signal Subsystem (SIGINT, SIGKILL, SIGCHLD)
+   ├── Standard Stream Redirection & Shell Piping (|)
+   └── POSIX-Style Signal Subsystem (SIGINT, SIGKILL, SIGCHLD)
 ```
 
 ---
