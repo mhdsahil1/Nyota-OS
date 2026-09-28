@@ -1,6 +1,6 @@
 # =============================================================================
-# Nyota OS — Makefile (Phase 1: x86_64 Kernel Foundation)
-# Builds a bootable 64-bit OS image running under QEMU.
+# Nyota OS — Makefile (Phase 6: Filesystem, ELF Loader & Real Userland)
+# Builds a bootable 64-bit OS image and NyotaFS filesystem disk running under QEMU.
 # =============================================================================
 
 # ── Cross-Platform Detection ─────────────────────────────────────────────────
@@ -23,6 +23,7 @@ endif
 # ── Toolchain ─────────────────────────────────────────────────────────────────
 CC      := gcc
 LD      := ld
+AR      := ar
 NASM    := nasm
 OBJCOPY := objcopy
 QEMU    := qemu-system-x86_64
@@ -49,6 +50,27 @@ CFLAGS := \
     -std=gnu99                     \
     -O2
 
+# ── Compiler Flags (Freestanding x86_64 Userland) ────────────────────────────
+USER_CFLAGS := \
+    -m64                           \
+    -mabi=sysv                     \
+    -ffreestanding                 \
+    -fno-pie                       \
+    -fno-pic                       \
+    -nostdlib                      \
+    -nostartfiles                  \
+    -fno-builtin                   \
+    -fno-stack-protector           \
+    -mno-red-zone                  \
+    -mno-sse                       \
+    -mno-sse2                      \
+    -Wall                          \
+    -Wextra                        \
+    -Iuser/libnyota                \
+    -O2
+
+USER_LD_FLAGS := -m i386pep --image-base 0x8000000000 --section-alignment 0x1000 --file-alignment 0x1000
+
 # ── Directories & Output Files ────────────────────────────────────────────────
 BUILD_DIR   := build
 BOOT_BIN    := $(BUILD_DIR)/boot.bin
@@ -56,7 +78,9 @@ STAGE2_BIN  := $(BUILD_DIR)/stage2.bin
 KERNEL_ELF  := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
 IMAGE       := $(BUILD_DIR)/nyota.img
+DATA_IMAGE  := $(BUILD_DIR)/nyota-data.img
 MKIMAGE     := $(BUILD_DIR)/mkimage$(EXE_EXT)
+MKNYOTAFS   := $(BUILD_DIR)/mknyotafs$(EXE_EXT)
 
 # ── Kernel Object Files ───────────────────────────────────────────────────────
 KERNEL_ASM_OBJS := \
@@ -89,31 +113,99 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/scheduler.o        \
     $(BUILD_DIR)/user_programs.o    \
     $(BUILD_DIR)/schedtest.o        \
-    $(BUILD_DIR)/usertest.o
+    $(BUILD_DIR)/usertest.o         \
+    $(BUILD_DIR)/block.o            \
+    $(BUILD_DIR)/ata.o              \
+    $(BUILD_DIR)/nyotafs.o          \
+    $(BUILD_DIR)/vfs.o              \
+    $(BUILD_DIR)/elf.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
-# ── Phony Targets ─────────────────────────────────────────────────────────────
-.PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help
+# ── Userspace Library & Binaries ─────────────────────────────────────────────
+LIBNYOTA := $(BUILD_DIR)/libnyota.a
 
-# Default target: build bootable disk image
-all: $(IMAGE)
+USER_BINARIES := \
+    fs/root/init         \
+    fs/root/bin/sh       \
+    fs/root/bin/hello    \
+    fs/root/bin/echo     \
+    fs/root/bin/ls       \
+    fs/root/bin/cat      \
+    fs/root/bin/ps       \
+    fs/root/bin/test
+
+# ── QEMU Drive Flags (Primary: Boot disk, Secondary: NyotaFS Data disk) ───────
+QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
+
+# ── Phony Targets ─────────────────────────────────────────────────────────────
+.PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help user fs disk
+
+# Default target: build bootable kernel image and NyotaFS filesystem disk
+all: $(IMAGE) $(DATA_IMAGE)
 	@echo.
 	@echo ==========================================================
-	@echo   Build successful: $(IMAGE)
+	@echo   Build successful: $(IMAGE) and $(DATA_IMAGE)
 	@echo   Launch in QEMU with: make run
 	@echo ==========================================================
 	@echo.
+
+user: $(USER_BINARIES)
+fs: $(DATA_IMAGE)
+disk: $(DATA_IMAGE)
 
 # ── Build Disk Image with host mkimage tool ───────────────────────────────────
 $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(MKIMAGE)
 	@echo [IMAGE] $(IMAGE)
 	@$(MKIMAGE) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE)
 
-# Host tool to assemble disk image
+# Host tools
 $(MKIMAGE): tools/mkimage.c | $(BUILD_DIR)
 	@echo [HOST]  tools/mkimage.c
 	@$(CC) -O2 $< -o $@
+
+$(MKNYOTAFS): tools/mknyotafs.c | $(BUILD_DIR)
+	@echo [HOST]  tools/mknyotafs.c
+	@$(CC) -O2 $< -o $@
+
+# ── Build NyotaFS Persistent Disk Image ───────────────────────────────────────
+$(DATA_IMAGE): $(MKNYOTAFS) $(USER_BINARIES) fs/root/etc/nyota.conf fs/root/home/welcome.txt | $(BUILD_DIR)
+	@echo [FS]    $(DATA_IMAGE)
+	@$(MKNYOTAFS) fs/root $(DATA_IMAGE) 16
+
+# ── Userspace Standard C Library (libnyota) ───────────────────────────────────
+$(BUILD_DIR)/crt0.o: user/libnyota/crt0.asm | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/crt0.asm
+	@$(NASM) -f $(ASM_FMT) $< -o $@
+
+$(BUILD_DIR)/lib_syscall.o: user/libnyota/syscall.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/syscall.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lib_string.o: user/libnyota/string.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/string.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lib_io.o: user/libnyota/io.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/io.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/lib_io.o
+	@echo [LIB]   $@
+	@$(AR) rcs $@ $^
+
+# ── Userspace Programs ────────────────────────────────────────────────────────
+fs/root/init: user/init/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
+	@echo [USER]  /init
+	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_init.o
+	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/init.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_init.o $(LIBNYOTA)
+	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/init.pe $@
+
+fs/root/bin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
+	@echo [USER]  /bin/$*
+	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_$*.o
+	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBNYOTA)
+	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/$*.pe $@
 
 # ── Bootloader Stage 1 (MBR) ──────────────────────────────────────────────────
 $(BOOT_BIN): boot/boot.asm | $(BUILD_DIR)
@@ -248,32 +340,52 @@ $(BUILD_DIR)/usertest.o: kernel/process/usertest.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/process/usertest.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/block.o: kernel/storage/block.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/block.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ata.o: kernel/storage/ata.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/ata.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/nyotafs.o: kernel/fs/nyotafs.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/fs/nyotafs.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs.o: kernel/fs/vfs.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/fs/vfs.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/elf.o: kernel/elf/elf.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/elf/elf.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 # ── Build Directory ───────────────────────────────────────────────────────────
 $(BUILD_DIR):
 	@$(MKDIR_CMD)
 
 # ── Run in QEMU ───────────────────────────────────────────────────────────────
-run: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio
+run: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -serial stdio
 
 # Run in QEMU with serial output piped to terminal without popup window
-run-serial: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+run-serial: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
 
 # Run scheduler / multitasking tests
-scheduler-test: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+scheduler-test: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
 
-stress-test: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+stress-test: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
 
 # Run automated memory test runner
-memtest: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -display none -serial stdio
+memtest: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -display none -serial stdio
 
 # Run with GDB server attached (waits on port 1234)
-run-debug: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -s -S -serial stdio
+run-debug: $(IMAGE) $(DATA_IMAGE)
+	$(QEMU) $(QEMU_DRIVE_FLAGS) -s -S -serial stdio
 
 debug: CFLAGS += -g
 debug: all
@@ -287,11 +399,13 @@ rebuild: clean all
 
 help:
 	@echo Nyota OS -- Build System Targets:
-	@echo   make              Build complete bootable image ($(IMAGE))
+	@echo   make              Build complete bootable image ($(IMAGE)) and disk ($(DATA_IMAGE))
+	@echo   make user         Build userspace libraries and ELF binaries
+	@echo   make fs           Build NyotaFS disk image ($(DATA_IMAGE))
 	@echo   make run          Launch in QEMU (with interactive display and serial)
 	@echo   make run-serial   Launch in QEMU headless (serial output to terminal)
 	@echo   make run-debug    Launch in QEMU with GDB stub paused on port 1234
 	@echo   make memtest      Run headless QEMU for memory testing
 	@echo   make clean        Remove all build artifacts and generated images
-	@echo   make rebuild      Clean build directory and build fresh image
+	@echo   make rebuild      Clean build directory and build fresh images
 	@echo   make debug        Build with debug symbols (-g)

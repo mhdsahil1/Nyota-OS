@@ -1,6 +1,6 @@
 /* =============================================================================
- * Nyota OS — Process Subsystem & Process Control Block (PCB) Management
- * Process table, PID allocation, memory isolation, and process termination.
+ * Nyota OS — Process Subsystem & Process Control Block (PCB) Management (Phase 6)
+ * Process table, PID allocation, memory isolation, ELF execution, and descriptors.
  * =========================================================================== */
 
 #include "process.h"
@@ -16,8 +16,13 @@
 #include "kernel.h"
 #include "gdt.h"
 #include "user_programs.h"
+#include "fs/vfs.h"
+#include "elf/elf.h"
 
 static process_t *process_table[PROCESS_MAX_COUNT] = {0};
+static process_t process_table_storage[PROCESS_MAX_COUNT];
+static uint8_t process_kernel_stacks[PROCESS_MAX_COUNT][16384] __attribute__((aligned(16)));
+static bool process_slot_in_use[PROCESS_MAX_COUNT] = {false};
 static uint32_t next_pid = 1;
 
 /* ── Process Management ───────────────────────────────────────────────────── */
@@ -25,6 +30,7 @@ static uint32_t next_pid = 1;
 void process_system_init(void) {
     for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
         process_table[i] = NULL;
+        process_slot_in_use[i] = false;
     }
     next_pid = 1;
 }
@@ -56,11 +62,83 @@ size_t process_count(void) {
     return count;
 }
 
+/* ── Stack Setup Helper for argc / argv ───────────────────────────────────── */
+
+static uint64_t setup_user_stack(page_table_t *pml4, const char *path, char *const argv[], int *out_argc, uint64_t *out_user_argv) {
+    /* Determine top physical frame */
+    uint64_t top_page_vaddr = USER_STACK_TOP - PAGE_SIZE;
+    uint64_t top_page_phys = paging_get_physical_in(pml4, top_page_vaddr);
+    if (top_page_phys == 0) return 0;
+
+    /* Count argc */
+    int argc = 0;
+    if (argv) {
+        while (argv[argc] != NULL && argc < 32) {
+            argc++;
+        }
+    }
+    if (argc == 0) {
+        argc = 1;
+    }
+
+    /* Stack pointer starts at top of stack page */
+    uint64_t user_rsp = USER_STACK_TOP;
+    uint32_t offset = PAGE_SIZE;
+
+    uint64_t arg_user_addrs[32];
+
+    /* Copy strings to stack in reverse */
+    for (int i = argc - 1; i >= 0; i--) {
+        const char *arg_str = (argv && argv[i]) ? argv[i] : path;
+        size_t len = strlen(arg_str) + 1;
+        if (offset < len) return 0;
+
+        offset -= (uint32_t)len;
+        user_rsp -= len;
+
+        memcpy((void *)(top_page_phys + offset), arg_str, len);
+        arg_user_addrs[i] = user_rsp;
+    }
+
+    /* 8-byte align */
+    uint64_t rem = user_rsp % 8;
+    if (rem != 0) {
+        user_rsp -= rem;
+        offset -= (uint32_t)rem;
+    }
+
+    /* Push argv[argc] = NULL */
+    user_rsp -= 8;
+    offset -= 8;
+    *(uint64_t *)(top_page_phys + offset) = 0;
+
+    /* Push argv[i] pointers */
+    for (int i = argc - 1; i >= 0; i--) {
+        user_rsp -= 8;
+        offset -= 8;
+        *(uint64_t *)(top_page_phys + offset) = arg_user_addrs[i];
+    }
+
+    uint64_t user_argv_ptr = user_rsp;
+
+    /* 16-byte align for System V ABI */
+    if (user_rsp % 16 != 0) {
+        user_rsp -= 8;
+        offset -= 8;
+    }
+
+    if (out_argc) *out_argc = argc;
+    if (out_user_argv) *out_user_argv = user_argv_ptr;
+
+    return user_rsp;
+}
+
+/* ── Create Process from Memory Blob (Phase 5 compatibility) ──────────────── */
+
 process_t *process_create(const char *name, uint64_t entry_point, const void *code_blob, size_t code_size) {
-    /* Find free slot in process table */
     int slot = -1;
     for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
-        if (!process_table[i]) {
+        if (!process_slot_in_use[i]) {
             slot = (int)i;
             break;
         }
@@ -71,14 +149,12 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
         return NULL;
     }
 
-    process_t *proc = (process_t *)kmalloc(sizeof(process_t));
-    if (!proc) {
-        kwarn("process_create: failed to allocate PCB");
-        return NULL;
-    }
+    process_slot_in_use[slot] = true;
+    process_t *proc = &process_table_storage[slot];
     memset(proc, 0, sizeof(process_t));
 
     proc->pid = next_pid++;
+    proc->parent_pid = 0;
     proc->state = PROCESS_NEW;
     proc->exit_status = 0;
     proc->runtime_ticks = 0;
@@ -93,32 +169,26 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
         memcpy(proc->name, "user_proc", 10);
     }
 
-    /* 1. Allocate dedicated 16 KiB kernel stack */
-    void *kstack = kmalloc(16384);
-    if (!kstack) {
-        kwarn("process_create: failed to allocate kernel stack");
-        kfree(proc);
-        return NULL;
-    }
-    proc->kernel_stack = (uint64_t)kstack;
-    proc->kernel_stack_top = (uint64_t)kstack + 16384;
+    /* Initialize file descriptors (stdin, stdout, stderr) */
+    vfs_init_process_fds(proc->fds);
 
-    /* 2. Create isolated process page table (cloned from kernel) */
+    /* Assign dedicated 16 KiB static kernel stack */
+    proc->kernel_stack = (uint64_t)&process_kernel_stacks[slot][0];
+    proc->kernel_stack_top = proc->kernel_stack + sizeof(process_kernel_stacks[slot]);
+
+    /* Create address space */
     page_table_t *pml4 = paging_create_address_space();
     if (!pml4) {
         kwarn("process_create: failed to allocate process PML4");
-        kfree(kstack);
-        kfree(proc);
+        process_slot_in_use[slot] = false;
         return NULL;
     }
     proc->cr3 = (uint64_t)pml4;
 
-    /* 3. Map user code page at USER_CODE_BASE */
+    /* Map code page */
     void *code_phys = pmm_alloc_page();
     if (!code_phys) {
-        kwarn("process_create: out of memory for user code frame");
-        kfree(kstack);
-        kfree(proc);
+        process_slot_in_use[slot] = false;
         return NULL;
     }
     memset(code_phys, 0, PAGE_SIZE);
@@ -128,52 +198,35 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
         memcpy(code_phys, code_blob, copy_sz);
     }
 
-    if (!paging_map_page_in(pml4, USER_CODE_BASE, (uint64_t)code_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE)) {
-        kwarn("process_create: failed to map user code page");
-        pmm_free_page(code_phys);
-        kfree(kstack);
-        kfree(proc);
-        return NULL;
-    }
+    paging_map_page_in(pml4, USER_CODE_BASE, (uint64_t)code_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
 
-    /* 4. Map user stack pages (16 KiB = 4 pages) */
+    /* Map stack pages */
     uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
     for (uint64_t sp = stack_base; sp < USER_STACK_TOP; sp += PAGE_SIZE) {
         void *stack_phys = pmm_alloc_page();
         if (!stack_phys) {
-            kwarn("process_create: out of memory for user stack frame");
-            kfree(kstack);
-            kfree(proc);
+            process_slot_in_use[slot] = false;
             return NULL;
         }
         memset(stack_phys, 0, PAGE_SIZE);
-
-        if (!paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE)) {
-            kwarn("process_create: failed to map user stack page");
-            pmm_free_page(stack_phys);
-            kfree(kstack);
-            kfree(proc);
-            return NULL;
-        }
+        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
     }
 
     proc->entry_point = entry_point ? entry_point : USER_CODE_BASE;
-    proc->user_stack_top = USER_STACK_TOP - 16; /* 16-byte alignment */
+    proc->user_stack_top = USER_STACK_TOP - 16;
 
-    /* 5. Fabricate initial interrupt_frame_t on kernel stack */
     interrupt_frame_t *frame = (interrupt_frame_t *)(proc->kernel_stack_top - sizeof(interrupt_frame_t));
     memset(frame, 0, sizeof(interrupt_frame_t));
 
     frame->rip = proc->entry_point;
-    frame->cs = GDT_USER_CODE_SEG | 3;       /* Ring 3 User Code (0x23) */
-    frame->rflags = 0x202;                   /* IF = 1, reserved bit 1 = 1 */
+    frame->cs = GDT_USER_CODE_SEG | 3;
+    frame->rflags = 0x202;
     frame->rsp = proc->user_stack_top;
-    frame->ss = GDT_USER_DATA_SEG | 3;       /* Ring 3 User Data (0x1B) */
+    frame->ss = GDT_USER_DATA_SEG | 3;
     frame->vector = 0x20;
 
     proc->saved_rsp = (uint64_t)frame;
 
-    /* 6. Register in process table and ready queue */
     process_table[slot] = proc;
     proc->state = PROCESS_READY;
     scheduler_add(proc);
@@ -181,11 +234,228 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
     return proc;
 }
 
+/* ── Create Process from ELF Executable (Phase 6 Core) ────────────────────── */
+
+process_t *process_create_from_elf(const char *path, char *const argv[]) {
+    if (!path) return NULL;
+
+    nyota_fs_t *fs = vfs_get_root_fs();
+    if (!fs) {
+        kwarn("process_create_from_elf: root filesystem not mounted");
+        return NULL;
+    }
+
+    uint64_t inode_num = 0;
+    if (nyotafs_resolve_path(fs, path, &inode_num) != 0) {
+        kwarn("process_create_from_elf: failed to resolve path");
+        return NULL;
+    }
+
+    int slot = -1;
+    for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
+        if (!process_slot_in_use[i]) {
+            slot = (int)i;
+            break;
+        }
+    }
+    if (slot == -1) {
+        kwarn("process_create_from_elf: process table full");
+        return NULL;
+    }
+
+    process_slot_in_use[slot] = true;
+    process_t *proc = &process_table_storage[slot];
+    memset(proc, 0, sizeof(process_t));
+
+    process_t *curr = process_get_current();
+    proc->pid = next_pid++;
+    proc->parent_pid = curr ? curr->pid : 0;
+    proc->state = PROCESS_NEW;
+    proc->exit_status = 0;
+
+    /* Extract process name from path */
+    const char *pname = path;
+    for (const char *p = path; *p != '\0'; p++) {
+        if (*p == '/') pname = p + 1;
+    }
+    size_t plen = strlen(pname);
+    if (plen >= PROCESS_NAME_MAX) plen = PROCESS_NAME_MAX - 1;
+    memcpy(proc->name, pname, plen);
+    proc->name[plen] = '\0';
+
+    /* Initialize file descriptors */
+    vfs_init_process_fds(proc->fds);
+
+    /* Assign dedicated 16 KiB static kernel stack */
+    proc->kernel_stack = (uint64_t)&process_kernel_stacks[slot][0];
+    proc->kernel_stack_top = proc->kernel_stack + sizeof(process_kernel_stacks[slot]);
+
+    /* Create address space */
+    page_table_t *pml4 = paging_create_address_space();
+    if (!pml4) {
+        process_slot_in_use[slot] = false;
+        return NULL;
+    }
+    proc->cr3 = (uint64_t)pml4;
+
+    /* Map user stack pages (16 KiB = 4 pages) */
+    uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
+    for (uint64_t sp = stack_base; sp < USER_STACK_TOP; sp += PAGE_SIZE) {
+        void *stack_phys = pmm_alloc_page();
+        if (!stack_phys) {
+            process_slot_in_use[slot] = false;
+            return NULL;
+        }
+        memset(stack_phys, 0, PAGE_SIZE);
+        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+    }
+
+    /* Load ELF program segments into process address space */
+    uint64_t entry_point = 0;
+    int elf_status = elf_load_executable(fs, inode_num, pml4, &entry_point);
+    if (elf_status != NYOTA_OK) {
+        kwarn("process_create_from_elf: elf_load_executable failed");
+        process_slot_in_use[slot] = false;
+        return NULL;
+    }
+
+    proc->entry_point = entry_point;
+
+    /* Setup argc / argv on user stack */
+    int argc = 0;
+    uint64_t user_argv = 0;
+    uint64_t user_rsp = setup_user_stack(pml4, path, argv, &argc, &user_argv);
+    if (user_rsp == 0) {
+        user_rsp = USER_STACK_TOP - 16;
+    }
+    proc->user_stack_top = user_rsp;
+
+    /* Fabricate initial interrupt_frame_t */
+    interrupt_frame_t *frame = (interrupt_frame_t *)(proc->kernel_stack_top - sizeof(interrupt_frame_t));
+    memset(frame, 0, sizeof(interrupt_frame_t));
+
+    frame->rip = proc->entry_point;
+    frame->cs = GDT_USER_CODE_SEG | 3;
+    frame->rflags = 0x202;
+    frame->rsp = proc->user_stack_top;
+    frame->ss = GDT_USER_DATA_SEG | 3;
+    frame->rdi = (uint64_t)argc;
+    frame->rsi = user_argv;
+    frame->vector = 0x20;
+
+    proc->saved_rsp = (uint64_t)frame;
+
+    process_table[slot] = proc;
+    proc->state = PROCESS_READY;
+    scheduler_add(proc);
+
+    return proc;
+}
+
+process_t *process_spawn_elf(const char *path, char *const argv[]) {
+    return process_create_from_elf(path, argv);
+}
+
+int process_exec(process_t *proc, const char *path, char *const argv[]) {
+    if (!proc || !path) return NYOTA_EINVAL;
+
+    nyota_fs_t *fs = vfs_get_root_fs();
+    if (!fs) return NYOTA_ENODEV;
+
+    uint64_t inode_num = 0;
+    if (nyotafs_resolve_path(fs, path, &inode_num) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    /* Create replacement address space */
+    page_table_t *new_pml4 = paging_create_address_space();
+    if (!new_pml4) return NYOTA_ENOMEM;
+
+    /* Map stack in new address space */
+    uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
+    for (uint64_t sp = stack_base; sp < USER_STACK_TOP; sp += PAGE_SIZE) {
+        void *stack_phys = pmm_alloc_page();
+        if (!stack_phys) return NYOTA_ENOMEM;
+        memset(stack_phys, 0, PAGE_SIZE);
+        paging_map_page_in(new_pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+    }
+
+    uint64_t entry_point = 0;
+    int elf_status = elf_load_executable(fs, inode_num, new_pml4, &entry_point);
+    if (elf_status != NYOTA_OK) {
+        return elf_status;
+    }
+
+    /* Setup argc / argv */
+    int argc = 0;
+    uint64_t user_argv = 0;
+    uint64_t user_rsp = setup_user_stack(new_pml4, path, argv, &argc, &user_argv);
+    if (user_rsp == 0) user_rsp = USER_STACK_TOP - 16;
+
+    /* Switch process to new address space */
+    proc->cr3 = (uint64_t)new_pml4;
+    proc->entry_point = entry_point;
+    proc->user_stack_top = user_rsp;
+
+    /* Extract new process name */
+    const char *pname = path;
+    for (const char *p = path; *p != '\0'; p++) {
+        if (*p == '/') pname = p + 1;
+    }
+    size_t plen = strlen(pname);
+    if (plen >= PROCESS_NAME_MAX) plen = PROCESS_NAME_MAX - 1;
+    memcpy(proc->name, pname, plen);
+    proc->name[plen] = '\0';
+
+    if (proc == process_get_current()) {
+        paging_load_cr3(proc->cr3);
+    }
+
+    /* Update saved interrupt frame */
+    interrupt_frame_t *frame = (interrupt_frame_t *)proc->saved_rsp;
+    if (frame) {
+        frame->rip = entry_point;
+        frame->rsp = user_rsp;
+        frame->rdi = (uint64_t)argc;
+        frame->rsi = user_argv;
+        frame->rax = 0;
+    }
+
+    return NYOTA_OK;
+}
+
+int process_waitpid(uint32_t pid, int *status) {
+    process_t *child = process_find(pid);
+    if (!child) return NYOTA_ENOENT;
+
+    if (child->state != PROCESS_TERMINATED) {
+        return 0; /* Process still running */
+    }
+
+    if (status) {
+        *status = child->exit_status;
+    }
+
+    /* Reclaim process table slot */
+    for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
+        if (process_table[i] == child) {
+            process_table[i] = NULL;
+            process_slot_in_use[i] = false;
+            break;
+        }
+    }
+
+    return (int)pid;
+}
+
 void process_exit(int status) {
     process_t *curr = process_get_current();
     if (curr) {
         curr->state = PROCESS_TERMINATED;
         curr->exit_status = status;
+
+        /* Close all open file descriptors */
+        vfs_close_process_fds(curr->fds);
 
         /* Print exit information */
         vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
@@ -198,14 +468,9 @@ void process_exit(int status) {
         vga_println("");
         vga_set_color(VGA_WHITE, VGA_BLACK);
 
-        /* Remove from scheduler ready queue and trigger context switch */
+        /* Remove from scheduler ready queue */
         scheduler_remove(curr);
         scheduler_request_reschedule();
-    }
-
-    /* Wait for next interrupt / context switch */
-    while (1) {
-        __asm__ volatile ("sti; hlt");
     }
 }
 
@@ -229,7 +494,6 @@ void process_list(void) {
     vga_println("--------------------------------------------------");
     vga_set_color(VGA_WHITE, VGA_BLACK);
 
-    /* Print idle task first */
     process_t *idle = scheduler_get_idle();
     if (idle) {
         vga_print_dec(idle->pid);
@@ -270,21 +534,36 @@ void process_list(void) {
     }
 }
 
+/* ── Launch First Userspace Process (/init) ───────────────────────────────── */
+
 process_t *process_spawn_init(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    vga_print("[INFO] Creating init process PID ");
-    vga_print_dec(next_pid);
-    vga_println("");
+    vga_print("[INFO]  ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Loading /init");
 
-    const void *blob = user_get_prog_a();
-    process_t *proc = process_create("init_proc", USER_CODE_BASE, blob, USER_PROGRAM_BLOB_SIZE);
-    if (!proc) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        vga_println("FATAL: Failed to create init process");
+    /* Try loading real ELF binary from filesystem */
+    process_t *proc = process_create_from_elf("/init", NULL);
+    if (proc) {
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ]  ");
         vga_set_color(VGA_WHITE, VGA_BLACK);
-        return NULL;
+        vga_println("ELF loaded");
+
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ]  ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_print("PID ");
+        vga_print_dec(proc->pid);
+        vga_println(" started");
+
+        return proc;
     }
+
+    /* Fallback if /init is not present on disk (Phase 5 fallback) */
+    kwarn("process_spawn_init: /init not found on disk, falling back to embedded init");
+    const void *blob = user_get_prog_a();
+    proc = process_create("init", USER_CODE_BASE, blob, USER_PROGRAM_BLOB_SIZE);
     return proc;
 }
 

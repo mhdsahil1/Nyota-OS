@@ -143,6 +143,25 @@ static void page_fault_handler(interrupt_frame_t *frame) {
     serial_write("Cause      : "); serial_write(rsvd ? "RESERVED BIT\n" : (pk ? "PROTECTION KEY\n" : (present ? "PROTECTION VIOLATION\n" : "NOT PRESENT\n")));
     serial_write("Mode       : "); serial_write(user ? "USER\n" : "KERNEL\n");
     serial_write("========================================\n");
+    serial_write("RAX: "); serial_write_hex(frame->rax);
+    serial_write(" RBX: "); serial_write_hex(frame->rbx);
+    serial_write(" RCX: "); serial_write_hex(frame->rcx);
+    serial_write(" RDX: "); serial_write_hex(frame->rdx); serial_write("\n");
+    serial_write("RSI: "); serial_write_hex(frame->rsi);
+    serial_write(" RDI: "); serial_write_hex(frame->rdi);
+    serial_write(" RBP: "); serial_write_hex(frame->rbp);
+    serial_write(" RSP: "); serial_write_hex(frame->rsp); serial_write("\n");
+    serial_write("Caller return addr at RSP+0x418: ");
+    serial_write_hex(*(uint64_t *)(frame->rsp + 0x418));
+    serial_write("\n");
+    serial_write("Caller stack frame:\n");
+    uint64_t *csp = (uint64_t *)(frame->rsp + 0x418);
+    for (int i = 0; i < 8; i++) {
+        serial_write("  ret+"); serial_write_dec(i * 8);
+        serial_write(": "); serial_write_hex(csp[i]); serial_write("\n");
+    }
+
+
 
     /* If the fault occurred in Ring 3 User Space, terminate offending process without crashing kernel */
     if (user) {

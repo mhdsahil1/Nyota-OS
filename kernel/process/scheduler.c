@@ -24,6 +24,8 @@ static process_t *sleep_queue = NULL;
 
 /* Current running process and idle process */
 static process_t *current_proc = NULL;
+static process_t idle_proc_storage;
+static uint8_t idle_kernel_stack[4096] __attribute__((aligned(16)));
 static process_t *idle_proc = NULL;
 
 /* Scheduler state flags & metrics */
@@ -114,10 +116,7 @@ void scheduler_init(void) {
     total_context_switches = 0;
 
     /* Create dedicated Kernel Idle Process (PID 0) */
-    idle_proc = (process_t *)kmalloc(sizeof(process_t));
-    if (!idle_proc) {
-        kernel_panic("scheduler_init: failed to allocate idle PCB");
-    }
+    idle_proc = &idle_proc_storage;
     memset(idle_proc, 0, sizeof(process_t));
 
     idle_proc->pid = 0;
@@ -125,13 +124,9 @@ void scheduler_init(void) {
     idle_proc->state = PROCESS_IDLE;
     idle_proc->cr3 = (uint64_t)paging_get_kernel_pml4();
 
-    /* Allocate dedicated 4 KiB kernel stack for idle task */
-    void *idle_kstack = kmalloc(4096);
-    if (!idle_kstack) {
-        kernel_panic("scheduler_init: failed to allocate idle stack");
-    }
-    idle_proc->kernel_stack = (uint64_t)idle_kstack;
-    idle_proc->kernel_stack_top = (uint64_t)idle_kstack + 4096;
+    /* Dedicated 4 KiB static kernel stack for idle task */
+    idle_proc->kernel_stack = (uint64_t)idle_kernel_stack;
+    idle_proc->kernel_stack_top = (uint64_t)idle_kernel_stack + sizeof(idle_kernel_stack);
 
     /* Fabricate initial interrupt_frame_t for idle_task (executes in Ring 0) */
     interrupt_frame_t *frame = (interrupt_frame_t *)(idle_proc->kernel_stack_top - sizeof(interrupt_frame_t));

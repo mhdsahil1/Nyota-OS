@@ -1,6 +1,6 @@
 /* =============================================================================
- * Nyota OS — Process Structure & User Task Abstraction (Phase 5)
- * Process Control Block (PCB), PID management, scheduling metrics, and states.
+ * Nyota OS — Process Structure & User Task Abstraction (Phase 6)
+ * Process Control Block (PCB), PID management, file descriptors, and ELF execution.
  * =========================================================================== */
 
 #ifndef NYOTA_PROCESS_H
@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "interrupts.h"
+#include "fs/vfs.h"
 
 /* User Address Space Layout (Located in PML4[1] for total hardware isolation) */
 #define USER_SPACE_BASE         0x0000008000000000ULL  /* 512 GB mark */
@@ -19,7 +20,7 @@
 #define PROCESS_NAME_MAX        32
 #define PROCESS_MAX_COUNT       32
 
-/* Process States (Phase 5 Lifecycle) */
+/* Process States (Phase 5/6 Lifecycle) */
 typedef enum {
     PROCESS_NEW = 0,
     PROCESS_READY,
@@ -32,6 +33,7 @@ typedef enum {
 /* Process Control Block (PCB) */
 typedef struct process {
     uint32_t pid;
+    uint32_t parent_pid;
     char name[PROCESS_NAME_MAX];
     process_state_t state;
     int exit_status;
@@ -43,6 +45,8 @@ typedef struct process {
     uint64_t saved_rsp;          /* Saved stack pointer pointing to interrupt_frame_t */
 
     uint64_t cr3;                /* Process PML4 physical address */
+
+    file_t *fds[MAX_PROCESS_FDS];/* Per-process file descriptor table */
 
     uint64_t wakeup_tick;        /* Absolute timer tick to wake from SLEEPING */
     uint64_t runtime_ticks;      /* Total PIT ticks spent in RUNNING state */
@@ -56,6 +60,11 @@ typedef struct process {
 void process_system_init(void);
 
 process_t *process_create(const char *name, uint64_t entry_point, const void *code_blob, size_t code_size);
+process_t *process_create_from_elf(const char *path, char *const argv[]);
+process_t *process_spawn_elf(const char *path, char *const argv[]);
+int process_exec(process_t *proc, const char *path, char *const argv[]);
+int process_waitpid(uint32_t pid, int *status);
+
 process_t *process_find(uint32_t pid);
 size_t process_count(void);
 void process_list(void);

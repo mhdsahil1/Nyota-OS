@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-5%3A%20Multitasking%2C%20Scheduler%20%26%20Process%20Management-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.5.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-6%3A%20Filesystem%2C%20ELF%20Loader%20%26%20Real%20Userland-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.6.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-6-overview-filesystem-elf-loader--real-userland">Phase 6 Overview</a>
+  ·
   <a href="#-phase-5-overview-multitasking-scheduler--process-management">Phase 5 Overview</a>
   ·
   <a href="#-phase-4-overview-processes-user-mode--system-calls">Phase 4 Overview</a>
@@ -60,9 +62,125 @@
 
 ---
 
+# 💾 Phase 6 Overview: Filesystem, ELF Loader & Real Userland
+
+**Current Status:** **Phase 6 — Filesystem, ELF Loader & Real Userland** (Completed)
+
+Phase 6 marks the defining architectural milestone where Nyota OS transitions from executing kernel-embedded test code into a **genuine, autonomous operating system**. The kernel now detects and reads from physical ATA block devices, mounts its own native filesystem (**NyotaFS**), maintains an extensible Virtual Filesystem (**VFS**) layer with per-process file descriptors, dynamically parses and maps **ELF64 executables**, launches **`/init` (PID 1)**, and hosts an interactive **Ring 3 user-space shell (`/bin/sh`)** alongside modular utility programs:
+
+```text
+                                 NYOTA OS SUBSYSTEM ARCHITECTURE
+                                                │
+                                            Hardware
+                                     (ATA Controller / Disk)
+                                                │
+                                                ▼
+                                       Block Device Layer
+                                     (block_device_t API)
+                                                │
+                                                ▼
+                                         Storage Driver
+                                         (ATA PIO Driver)
+                                                │
+                                                ▼
+                                             NyotaFS
+                                   (Superblock / Inodes / Extents)
+                                                │
+                                                ▼
+                                     Virtual Filesystem (VFS)
+                                 (File Objects / Descriptors / Devs)
+                                                │
+                                                ▼
+                                        System Call Engine
+                                   (Vector 0x80 / Dispatcher)
+                                                │
+                       ┌────────────────────────┴────────────────────────┐
+                       ▼                                                 ▼
+                  ELF64 Loader                                  Process Management
+             (Segments / Permissions)                        (Address Spaces / Contexts)
+                       │                                                 │
+                       └────────────────────────┬────────────────────────┘
+                                                │
+                                                ▼
+                                         Userland (Ring 3)
+                            ┌───────────────────┼───────────────────┐
+                            ▼                   ▼                   ▼
+                          /init               /bin/sh           Utilities
+                         (PID 1)              (Shell)      (hello, echo, ls, cat, ps, test)
+```
+
+---
+
+### Key Subsystems Delivered in Phase 6:
+
+1. **Generic Block Device Abstraction & Storage Driver**:
+   - `block_device_t` structure providing clean read/write primitives (`block_device_read()`, `block_device_write()`) decoupled from underlying hardware drivers.
+   - **ATA PIO Driver** (`kernel/storage/ata.c`):
+     - Hardware initialization and drive interrogation via `ATA IDENTIFY`.
+     - LBA28 512-byte sector reads and writes on Primary and Secondary ATA channels.
+     - Dual-disk configuration: Primary Master (`build/nyota.img` boot disk) and Primary Slave (`build/nyota-data.img` persistent filesystem disk).
+
+2. **Native Filesystem (NyotaFS)**:
+   - On-disk layout: `Superblock` -> `Block Bitmap` -> `Inode Bitmap` -> `Inode Table` -> `Data Blocks`.
+   - **Superblock (`nyota_superblock_t`)**: Magic `0x4E594F53` ("NYOS"), version 1, 1024-byte block size, 16,384 total blocks (16 MiB disk), inode table bounds, and root inode identifier (inode 1).
+   - **Inode Allocation & Management (`nyota_inode_t`)**: 128-byte inodes tracking permissions, file sizes, creation/modification timestamps, 8 direct data blocks, and 1 indirect block pointer.
+   - **Directory Mapping (`nyota_dirent_t`)**: Mapping file and directory names to inode numbers with standard `.` and `..` support.
+   - **Path Resolution Engine (`nyotafs_resolve_path`)**: Resolves hierarchical paths (e.g. `/bin/sh`, `/etc/nyota.conf`, `/home/welcome.txt`) across nested directory levels.
+
+3. **Virtual Filesystem (VFS) Layer & Kernel File Objects**:
+   - Generic VFS abstraction dispatching file system operations (`vfs_open`, `vfs_close`, `vfs_read`, `vfs_write`, `vfs_seek`, `vfs_stat`, `vfs_readdir`, `vfs_mkdir`).
+   - Reference-counted global file table tracking open file instances (`file_t`), current seek offsets, and access modes (`O_RDONLY`, `O_WRONLY`, `O_CREAT`, `O_APPEND`).
+   - **Per-Process File Descriptors**: Process structures contain isolated descriptor tables initialized with standard streams:
+     - `FD 0 (stdin)`: Connected to `/dev/console` (interactive keyboard and serial input).
+     - `FD 1 (stdout)`: Connected to `/dev/console` (VGA terminal mirrored to COM1 serial).
+     - `FD 2 (stderr)`: Connected to `/dev/console` (diagnostic logging).
+   - **Device Files**: Direct VFS routing for `/dev/console` and `/dev/null`.
+
+4. **Freestanding ELF64 Loader**:
+   - Zero-dependency ELF parser validating ELF magic (`0x7F 'E' 'L' 'F'`), 64-bit class, LSB endianness, and `EM_X86_64` architecture.
+   - Segment loader inspecting Program Headers for `PT_LOAD` segments, dynamically allocating physical frames, mapping them into user virtual memory at their target `p_vaddr`, and copying executable code/data from disk.
+   - Segment permissions enforced: readable (`PF_R`), writable (`PF_W`), and executable (`PF_X`).
+   - Automatic BSS zeroing for uninitialized global and static data.
+   - Extraction of entry point address (`e_entry`) to set the initial instruction pointer (`RIP`).
+
+5. **Process Creation from Disk & Execution (`exec` / `spawn`)**:
+   - `process_create_from_elf()` / `process_spawn_elf()`:
+     - Opens ELF binary from disk, creates an isolated 4-level PML4 address space, loads segments, maps a 16 KiB user stack, fabricates an interrupt frame, and enqueues the process in the scheduler.
+     - Places command-line arguments (`argc`, `argv`) onto the user stack according to System V ABI standards.
+   - `process_exec()`: In-place address-space replacement allowing a process to execute a new program image.
+   - Process termination cleanup: closes open file descriptors, reclaims address spaces, records exit status, and wakes parent tasks waiting in `waitpid()`.
+
+6. **Userspace Standard C Library (`libnyota`)**:
+   - Freestanding userland runtime compiled into `build/libnyota.a`:
+     - `crt0.asm`: Assembly entry stub setting up the stack frame, calling `main(argc, argv)`, and invoking `exit(status)` syscall upon return.
+     - `syscall.c`: Vector 0x80 syscall wrappers (`open`, `close`, `read`, `write`, `seek`, `stat`, `getdents`, `mkdir`, `exec`, `spawn`, `waitpid`, `getpid`, `yield`, `sleep`, `exit`).
+     - `io.c`: Formatted `printf`, `putchar`, `puts`, `getchar`, and line-buffered `getline`.
+     - `string.c`: String and memory utilities (`strlen`, `strcmp`, `strncmp`, `strcpy`, `strncpy`, `memcpy`, `memset`).
+
+7. **Real Userland Environment & Interactive Shell**:
+   - **`/init` (PID 1)**: First real user process launched by the kernel after mounting root. Executes the automated self-test suite and supervises the user shell.
+   - **`/bin/sh`**: Interactive Ring 3 command shell supporting commands:
+     - `help`: Displays available shell commands.
+     - `ls [dir]`: Directory inspection via VFS directory enumeration.
+     - `cat <file>`: Reads and displays file contents from persistent storage.
+     - `echo [args...]`: Echoes command-line arguments to stdout.
+     - `ps`: Queries active system processes, states, and execution metrics.
+     - `pwd`: Displays current working directory.
+     - `clear`: Clears terminal screen.
+     - `run <path> [args]`: Executes arbitrary ELF64 programs from disk.
+     - Automatic PATH resolution: typing `hello` resolves to `/bin/hello`.
+   - **Modular User Binaries**: `/bin/hello`, `/bin/echo`, `/bin/ls`, `/bin/cat`, `/bin/ps`, and `/bin/test`.
+
+8. **User Memory Validation & Security Protection**:
+   - `user_validate_pointer()`: Ensures all user-supplied pointers reside strictly within user space (`0x8000000000` to `0x8000000000 + 512GB`) and refer to present user pages before dereferencing.
+   - Safe data transfers: `copy_from_user()`, `copy_to_user()`, and `copy_string_from_user()` reject illegal addresses with `-EFAULT` without triggering kernel crashes.
+   - Attempted user access to kernel memory generates hardware `#PF` exceptions, terminating the offending user process while keeping the kernel and remaining processes fully operational.
+
+---
+
 # 🔄 Phase 5 Overview: Multitasking, Scheduler & Process Management
 
-**Current Status:** **Phase 5 — Multitasking, Scheduler & Process Management** (Completed)
+**Status:** **Phase 5 — Multitasking, Scheduler & Process Management** (Completed)
 
 Phase 5 transforms Nyota OS from a single-tasking operating system into a **fully preemptive, multi-process operating system** capable of managing multiple independent user processes, safely switching between isolated virtual address spaces, and preempting CPU-bound code using hardware timer interrupts:
 
@@ -904,13 +1022,26 @@ Phase 5: Preemptive Multitasking & Scheduling   ◄ [COMPLETED]
    ├── Kernel Idle Task (PID 0) with Power-Saving hlt Loop
    └── Interactive Process Manager (ps, multitask, testsched, viol_iso)
 
-Phase 6: Filesystem & Storage                     ◄ [NEXT]
-   ├── IDE / ATA Sector I/O Driver
-   └── Virtual File System (VFS) & FAT32 / TAR FS
+Phase 6: Filesystem, ELF Loader & Real Userland  ◄ [COMPLETED]
+   ├── Generic Block Device Abstraction (block_device_t)
+   ├── ATA PIO Storage Driver (IDENTIFY, LBA28 sector I/O)
+   ├── Dual-Drive Architecture (boot image + NyotaFS persistent disk)
+   ├── Native Filesystem (NyotaFS: Superblock, Bitmaps, Inodes, Extents)
+   ├── Directory Hierarchies & Recursive Path Resolution Engine
+   ├── Virtual Filesystem Layer (VFS: open, close, read, write, seek, stat, readdir, mkdir)
+   ├── Kernel File Objects (file_t) & Per-Process File Descriptor Tables
+   ├── Standard Streams (stdin, stdout, stderr) & Device Files (/dev/console, /dev/null)
+   ├── Freestanding ELF64 Loader (PT_LOAD segments, memory mapping, permissions)
+   ├── Process Creation from Disk & Execution (spawn, exec, System V ABI argc/argv stack)
+   ├── Userspace Standard C Library (libnyota: crt0, syscalls, stdio printf, string)
+   ├── Autonomous Init Process (PID 1 /init) & Interactive Userspace Shell (/bin/sh)
+   ├── Userspace Utilities (/bin/hello, /bin/echo, /bin/ls, /bin/cat, /bin/ps, /bin/test)
+   └── Strict User Memory Validation (user_validate_pointer, copy_from/to_user, safe EFAULT)
 
-Phase 7: Executable Formats & Shell
-   ├── 64-bit ELF Binary Loader
-   └── User-Space Command-Line Shell & Utilities
+Phase 7: IPC, Pipes & Process Control            ◄ [NEXT]
+   ├── Anonymous & Named Pipes
+   ├── Standard Stream Redirection & Piping (|)
+   └── Signal Subsystem (SIGINT, SIGKILL, SIGCHLD)
 ```
 
 ---

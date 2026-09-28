@@ -1,5 +1,5 @@
 /* =============================================================================
- * Nyota OS — Kernel Main & Core Subsystems (Phase 2)
+ * Nyota OS — Kernel Main & Core Subsystems (Phase 6)
  * Target: x86_64 Long Mode
  * =========================================================================== */
 
@@ -24,6 +24,11 @@
 #include "process.h"
 #include "scheduler.h"
 #include "schedtest.h"
+#include "storage/block.h"
+#include "storage/ata.h"
+#include "fs/nyotafs.h"
+#include "fs/vfs.h"
+#include "elf/elf.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -141,8 +146,9 @@ void kernel_main(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("Timer");
 
-    /* 8. Initialize PS/2 Keyboard Driver */
+    /* 8. Initialize PS/2 Keyboard Driver & Serial Interrupts */
     keyboard_init();
+    serial_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
@@ -197,16 +203,64 @@ void kernel_main(void) {
     /* 12. Process Subsystem & Preemptive Scheduler */
     process_system_init();
     scheduler_init();
-
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("Scheduler");
+
+    /* 13. Storage Subsystem (ATA PIO) */
+    ata_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Storage");
+
+    /* 14. Virtual Filesystem & NyotaFS Mount */
+    vfs_init();
+
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_print("[INFO]  ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Mounting root filesystem");
+
+    block_device_t *root_bdev = block_device_find_by_name("ata1");
+    if (!root_bdev) {
+        root_bdev = block_device_find_by_name("ata0");
+    }
+
+    if (root_bdev) {
+        vfs_mount_root(root_bdev);
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ] ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_println("NyotaFS");
+
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ] ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_println("VFS");
+    } else {
+        kwarn("No block device found for root filesystem");
+    }
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("ELF Loader");
     vga_println("");
 
-    /* 13. Spawn 3 Independent User Processes for Multitasking */
-    schedtest_spawn_triplet();
+    /* 15. Launch First Userspace Process (/init) */
+    process_t *init_proc = process_spawn_init();
 
-    /* 14. Interactive Kernel Console Shell */
+    /* 16. Start Scheduler & Enter Multitasking */
+    if (init_proc) {
+        process_run(init_proc);
+        /* Idle kernel thread while userspace is active */
+        while (process_count() > 0) {
+            __asm__ volatile ("sti; hlt");
+        }
+    }
+
+    /* Fallback to interactive kernel console if userspace terminates */
     console_run();
 }

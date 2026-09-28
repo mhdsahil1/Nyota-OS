@@ -208,6 +208,8 @@ bool keyboard_read_event(key_event_t *event) {
 }
 
 #include "serial.h"
+#include "timer.h"
+#define COM1_PORT 0x3F8
 
 char keyboard_getchar(void) {
     key_event_t ev;
@@ -222,7 +224,7 @@ char keyboard_getchar(void) {
             if (c == '\r') c = '\n';
             return c;
         }
-        __asm__ volatile ("hlt");
+        __asm__ volatile ("sti; hlt");
     }
 }
 

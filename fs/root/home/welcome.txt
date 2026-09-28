@@ -1,0 +1,3 @@
+Welcome to Nyota OS v0.6.0!
+Type 'help' to see the list of available commands.
+Try running 'hello', 'ls /bin', 'echo hello world', or 'test'.

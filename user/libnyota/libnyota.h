@@ -1,0 +1,105 @@
+/* =============================================================================
+ * Nyota OS — Userspace Standard C Library Header (libnyota)
+ * System call wrappers, standard I/O, string manipulation, process management.
+ * Pure freestanding definitions without host CRT dependencies.
+ * =========================================================================== */
+
+#ifndef LIBNYOTA_H
+#define LIBNYOTA_H
+
+/* Pure freestanding type definitions based on GCC/Clang builtins */
+typedef __INT8_TYPE__      int8_t;
+typedef __INT16_TYPE__     int16_t;
+typedef __INT32_TYPE__     int32_t;
+typedef __INT64_TYPE__     int64_t;
+
+typedef __UINT8_TYPE__     uint8_t;
+typedef __UINT16_TYPE__    uint16_t;
+typedef __UINT32_TYPE__    uint32_t;
+typedef __UINT64_TYPE__    uint64_t;
+
+typedef __SIZE_TYPE__      size_t;
+typedef __INTPTR_TYPE__    intptr_t;
+typedef __UINTPTR_TYPE__   uintptr_t;
+
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+/* C23 has bool, true, false as built-in keywords */
+#else
+#ifndef bool
+typedef _Bool              bool;
+#define true               1
+#define false              0
+#endif
+#endif
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+#define STDIN_FILENO    0
+#define STDOUT_FILENO   1
+#define STDERR_FILENO   2
+
+#define O_RDONLY        0x0000
+#define O_WRONLY        0x0001
+#define O_RDWR          0x0002
+#define O_CREAT         0x0040
+#define O_TRUNC         0x0200
+#define O_APPEND        0x0400
+
+#define SEEK_SET        0
+#define SEEK_CUR        1
+#define SEEK_END        2
+
+#define NYOTA_NAME_MAX  54
+
+typedef struct {
+    uint64_t inode;
+    uint32_t mode;
+    uint64_t size;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t created;
+    uint64_t modified;
+} stat_t;
+
+typedef struct {
+    uint64_t inode;
+    uint8_t  type;
+    char     name[NYOTA_NAME_MAX];
+} dirent_t;
+
+/* System Calls */
+int64_t write(int fd, const void *buf, size_t count);
+int64_t read(int fd, void *buf, size_t count);
+int open(const char *path, int flags, ...);
+int close(int fd);
+int64_t seek(int fd, int64_t offset, int whence);
+int stat(const char *path, stat_t *st);
+int getdents(int fd, dirent_t *dirp);
+int mkdir(const char *path, int mode);
+void exit(int status) __attribute__((noreturn));
+int getpid(void);
+void yield(void);
+int sleep(uint64_t ms);
+int exec(const char *path, char *const argv[]);
+int spawn(const char *path, char *const argv[]);
+int waitpid(int pid, int *status);
+
+/* String & Memory Functions */
+size_t strlen(const char *s);
+int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, size_t n);
+void *memcpy(void *dest, const void *src, size_t n);
+void *memset(void *s, int c, size_t n);
+
+/* Standard I/O Functions */
+int putchar(int c);
+int puts(const char *s);
+int getchar(void);
+int getline(char *buf, size_t size);
+int printf(const char *format, ...);
+
+#endif /* LIBNYOTA_H */

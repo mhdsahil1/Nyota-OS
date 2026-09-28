@@ -19,7 +19,7 @@
 
 KERNEL_TEMP_BUF   equ 0x10000   ; Temporary buffer in low memory
 KERNEL_TARGET_ADDR equ 0x100000  ; Final destination: 1 MB mark
-KERNEL_SECTOR_CNT equ 125       ; Read 125 sectors (62.5 KB - fits within 64 KB segment)
+KERNEL_SECTOR_CNT equ 256       ; Read 256 sectors (128 KB kernel capacity)
 KERNEL_START_LBA  equ 5         ; LBA 5 (Sector 0=boot, Sectors 1..4=stage2)
 
 stage2_entry:
@@ -105,46 +105,40 @@ puts16:
 
 ; ── Load kernel from disk into 0x10000 ────────────────────────────────────────
 load_kernel_data:
-    ; Try BIOS Extended Read (LBA packet int 0x13, ah=0x42)
+    ; Read kernel in 4 chunks of 64 sectors (32 KB each)
+    ; Target buffer segments: 0x1000, 0x1800, 0x2000, 0x2800 (physical 0x10000..0x30000)
+    mov  word [dap_packet + 2], 64
+    mov  word [dap_packet + 4], 0x0000
+    mov  word [dap_packet + 6], 0x1000
+    mov  dword [dap_packet + 8], KERNEL_START_LBA
+    mov  dword [dap_packet + 12], 0
+
+    mov  cx, 4
+.chunk_loop:
+    push cx
     mov  si, dap_packet
     mov  dl, [stage2_drive]
     mov  ah, 0x42
     int  0x13
-    jnc  .read_done
+    jc   .read_error
 
-    ; Fallback to standard CHS read if extended read unsupported
-    mov  di, 3
-.chs_retry:
-    mov  ax, 0x1000
-    mov  es, ax
-    xor  bx, bx                 ; ES:BX = 0x1000:0x0000 (physical 0x10000)
-    mov  ah, 0x02
-    mov  al, KERNEL_SECTOR_CNT
-    mov  ch, 0                  ; Cylinder 0
-    mov  cl, 6                  ; Sector 6 (1-based: LBA 5 + 1)
-    mov  dh, 0                  ; Head 0
-    mov  dl, [stage2_drive]
-    int  0x13
-    jnc  .read_done
+    add  word [dap_packet + 6], 0x0800  ; Advance segment by 32 KB (0x800 paras)
+    add  dword [dap_packet + 8], 64     ; Advance LBA by 64 sectors
+    pop  cx
+    loop .chunk_loop
 
-    xor  ax, ax
-    mov  dl, [stage2_drive]
-    int  0x13
-    dec  di
-    jnz  .chs_retry
+    mov  si, msg_kernel_loaded
+    call puts16
+    ret
 
-    ; Disk error
+.read_error:
+    pop  cx
     mov  si, err_kernel_read
     call puts16
 .hang:
     cli
     hlt
     jmp  .hang
-
-.read_done:
-    mov  si, msg_kernel_loaded
-    call puts16
-    ret
 
 ; ── Enable A20 Line ──────────────────────────────────────────────────────────
 enable_a20:
@@ -380,10 +374,11 @@ align 4
 dap_packet:
     db 0x10                     ; Packet size (16 bytes)
     db 0                        ; Reserved
-    dw KERNEL_SECTOR_CNT        ; Number of sectors
+    dw 64                       ; Number of sectors per chunk
     dw 0x0000                   ; Target buffer offset
-    dw 0x1000                   ; Target buffer segment (0x1000:0x0000 = 0x10000)
-    dq KERNEL_START_LBA         ; Starting LBA sector
+    dw 0x1000                   ; Target buffer segment
+    dd KERNEL_START_LBA         ; Starting LBA sector (low 32 bits)
+    dd 0                        ; Starting LBA sector (high 32 bits)
 
 align 8
 gdt64:

@@ -50,6 +50,21 @@ void cpu_init(void) {
         cpu_info.has_nx = false;
         cpu_info.has_long_mode = false;
     }
+
+    /* 4. Enable SSE / SSE2 hardware execution in CR0 & CR4 */
+    if (cpu_info.has_sse) {
+        uint64_t cr0;
+        __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+        cr0 &= ~(1ULL << 2); /* Clear EM (Emulation) */
+        cr0 |= (1ULL << 1);  /* Set MP (Monitor Coprocessor) */
+        __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0));
+
+        uint64_t cr4;
+        __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+        cr4 |= (1ULL << 9);  /* OSFXSR: FXSAVE/FXRSTOR and SSE instructions */
+        cr4 |= (1ULL << 10); /* OSXMMEXCPT: unmasked SSE FP exceptions */
+        __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4));
+    }
 }
 
 const cpu_info_t *cpu_get_info(void) {
