@@ -683,7 +683,7 @@ static int64_t sys_handle_nanosleep(uint64_t req_uptr, uint64_t rem_uptr) {
     uint64_t ms = (uint64_t)req.tv_sec * 1000 + (uint64_t)(req.tv_nsec / 1000000);
     if (ms == 0 && req.tv_nsec > 0) ms = 1;
 
-    timer_sleep(ms);
+    scheduler_sleep(ms);
 
     if (rem_uptr != 0) {
         if (user_validate_pointer((void *)rem_uptr, sizeof(struct timespec), true)) {

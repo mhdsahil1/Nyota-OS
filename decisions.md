@@ -187,3 +187,91 @@ All automated test suites were updated to account for the Phase 9 login prompt a
   - `pipe_write()` transitions caller to `PROCESS_SLEEPING` when pipe buffer is full (`PIPE_CAPACITY`), waking upon read activity or closed readers (`SIGPIPE`).
   - Fixed erroneous sign negation on `SYS_ERR_*` constants in `kernel/ipc/pipe.c` (which were already defined negative in `syscall.h`).
 
+---
+
+## 6. Phase 9 Part 2: Service Management, Logging & Time Subsystem
+
+### 6.1. Service Supervision & Lifecycle Management
+- **Architecture**:
+  - Clean service supervision embedded inside PID 1 (`/sbin/init`), companion CLI daemon `/sbin/nyotad`, and control utility `/bin/service`.
+  - Service metadata tracking: `name`, `command` (path), `PID`, `state` (`STOPPED`, `STARTING`, `RUNNING`, `STOPPING`, `FAILED`), `exit_status`, `start_time`, `last_start_time`, `last_exit_time`, `restart_count`, `restart_policy` (`never`, `always`, `on-failure`), `depends`.
+- **Dynamic Configuration (`/etc/init.conf`)**:
+  - Parsed dynamically at boot with automatic default fallback.
+  - Supports syntax: `service <name> <path> [restart=<never|always|on-failure>] [depends=<dep_service>]`.
+- **Dependency Resolution**:
+  - Before starting a service, dependencies declared via `depends=` are validated.
+  - If a dependency is not running, the supervisor attempts to start it first. If the dependency fails to start, the dependent service is aborted and marked `FAILED`.
+- **Graceful Termination & Stopping**:
+  - `stop_service()` sends `SIGTERM`, waits via `waitpid(WNOHANG)` across a polling window, escalates to `SIGKILL` if uncooperative, and updates state to `STOPPED`. Manually stopped services are prevented from auto-restarting.
+
+### 6.2. Crash Loop Protection & Autonomous Recovery
+- **Autonomous Recovery**:
+  - Terminated children generate `SIGCHLD` and wake PID 1.
+  - Child exit status is captured via `waitpid(-1, &status, WNOHANG)`.
+  - Supervisor evaluates restart policy: `RESTART_ALWAYS` or `RESTART_ON_FAILURE` (triggered when `exit_status != 0`).
+- **Crash Loop Protection**:
+  - Rapidly failing services increment `restart_count` on each crash cycle.
+  - If a service exceeds 5 restarts within a short window, the supervisor transitions the service state to `FAILED`, logs `restart limit reached`, and prevents infinite restart loops that consume CPU.
+  - Stable runs (>30s) automatically reset `restart_count` to zero.
+  - `reap_children()` is executed immediately upon receiving IPC control messages, guaranteeing that queries (`service list`, `service status`) always reflect the freshest state.
+
+### 6.3. Kernel Logging Subsystem & Userland Daemons
+- **Kernel Ring Buffer (`klog`)**:
+  - Bounded circular buffer (`kernel/logging.c`) with levels `DEBUG`, `INFO`, `WARN`, `ERROR`, `PANIC` and monotonic millisecond timestamps.
+  - Safe wraparound overwrites oldest entries without unbounded memory consumption.
+- **System Logger Daemon (`/sbin/loggerd`)**:
+  - Periodically drains `klog()` ring buffer into `/var/log/kernel.log`.
+  - Listens on `/run/logger.sock` (`AF_UNIX`) and records system messages into `/var/log/system.log`.
+  - Ensures initial creation of `/var/log/kernel.log`, `/var/log/system.log`, and `/var/log/services.log`.
+- **Bounded Log Rotation**:
+  - When log files exceed 16 KiB, `loggerd` rotates `<file>` to `<file>.old` and truncates `<file>` with `[LOG ROTATED]`, preventing disk exhaustion.
+- **Service Lifecycle Event Logging**:
+  - Lifecycle state transitions (`starting`, `running pid=`, `stopped`, `exited status=`, `restarting`, `restart limit reached`) are formatted as `[HH:MM:SS] <LEVEL> service: <msg>` and written directly to the console, `klog()`, and `/var/log/services.log`.
+- **Userland `logger` Utility (`/bin/logger`)**:
+  - Submits log entries via `/run/logger.sock`, directly appends to `/var/log/system.log`, and mirrors to `klog()`.
+
+### 6.4. Hardware Time & Timekeeping Subsystem
+- **CMOS Real-Time Clock (`kernel/time/rtc.c`)**:
+  - Interfaces directly with Motorola 146818 CMOS RTC via I/O ports `0x70` and `0x71`.
+  - Detects Binary vs. BCD encoding and 12-hour vs. 24-hour formats; converts to UTC civil date.
+  - Computes Unix epoch seconds from civil year, month, day, hour, minute, second.
+- **Monotonic Clock (`kernel/time/clock.c`)**:
+  - Maintained independently from wall-clock time using PIT timer ticks.
+  - Guaranteed never to go backwards; used for scheduler timing, sleeps, timeouts, and uptime.
+- **Time Syscalls**:
+  - `SYS_TIME` (44): Returns Unix epoch seconds.
+  - `SYS_CLOCK_GETTIME` (45): Supports `CLOCK_REALTIME` and `CLOCK_MONOTONIC` into `struct timespec`.
+  - `SYS_NANOSLEEP` (46): Validates user pointers and yields CPU via `scheduler_sleep()`.
+- **Userland Date & Uptime Utilities**:
+  - `/bin/date`: Displays calendar date and time formatted as `YYYY-MM-DD HH:MM:SS`.
+  - `/bin/uptime`: Displays system uptime formatted as `up HH:MM:SS`.
+
+### 6.5. Subsystem Bug Fixes & Discovered Edge Cases
+1. **Sleep Queue Corruption in `signal_send()` (`kernel/process/signal.c`)**:
+   - *Bug*: When waking a process from `PROCESS_SLEEPING`, `signal_send()` directly modified `state = PROCESS_READY` and called `scheduler_add(target)` without unlinking from `sleep_queue`. This corrupted `sleep_queue`, causing timer ticks to corrupt the ready queue and freeze sleeping processes (such as `sh` or `init`).
+   - *Fix*: Changed `signal_send()` to call `scheduler_wake(target)`, which cleanly unlinks the target from `sleep_queue` before enrolling into the scheduler ready queue.
+2. **`process_exit()` Non-Halting Execution (`kernel/process/process.c`)**:
+   - *Bug*: `process_exit()` marked the process as `PROCESS_ZOMBIE`, removed it from the scheduler, and returned to `signal_check_and_deliver()`. Because it returned to `syscall_handler()`, the CPU IRETed back to Ring 3 userspace, allowing the terminated process to resume executing and overwrite its state.
+   - *Fix*: Added `while (1) { __asm__ volatile ("sti; hlt"); }` at the end of `process_exit()`, ensuring terminated processes never resume execution in userland and cleanly wait for context switch.
+3. **`sys_handle_nanosleep()` Non-Spinning Sleep (`kernel/arch/x86_64/syscall.c`)**:
+   - *Bug*: `sys_handle_nanosleep()` invoked `timer_sleep()`, which spun on `hlt` without yielding CPU.
+   - *Fix*: Switched to `scheduler_sleep(ms)`, transitioning calling process to `PROCESS_SLEEPING` and yielding the CPU to other ready processes.
+
+### 6.6. Verification & Regression Suites
+1. **`tools/test_phase9_part2.py` (Phase 9 Part 2 Service & Time Suite)**:
+   - Verified RTC initialization and UTC wall-clock time decoding.
+   - Verified `/bin/date` format (`YYYY-MM-DD HH:MM:SS`) and `/bin/uptime` format (`up HH:MM:SS`).
+   - Verified `/bin/service list` formatted table (`SERVICE`, `PID`, `STATE`, `RESTARTS`).
+   - Verified `service status`, `service stop`, `service start`, and `service restart`.
+   - Verified `/sbin/nyotad` service manager companion interface.
+   - Verified persistent logs in `/var/log/services.log`, `/var/log/kernel.log`, `/var/log/system.log`.
+   - Verified `/bin/logger` utility writes to `/var/log/system.log`.
+   - Verified SIGCHLD crash recovery with automatic restarting.
+   - Verified crash loop protection: repeated failures cap at 5 restarts and transition to `FAILED`.
+   - **Result**: **ALL 26 CHECKS PASS (100%)**.
+2. **`tools/test_phase9_part1.py`**:
+   - **Result**: **ALL 19 CHECKS PASS (100%)**.
+3. **`tools/test_security.py`**:
+   - **Result**: **ALL 25 CHECKS PASS (100%)**.
+
+

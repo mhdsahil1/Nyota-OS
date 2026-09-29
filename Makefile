@@ -153,6 +153,7 @@ LIBNYOTA := $(BUILD_DIR)/libnyota.a
 USER_BINARIES := \
     fs/root/init            \
     fs/root/sbin/init       \
+    fs/root/sbin/nyotad     \
     fs/root/sbin/loggerd    \
     fs/root/sbin/ttyd       \
     fs/root/sbin/netd       \

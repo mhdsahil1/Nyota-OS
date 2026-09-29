@@ -33,8 +33,7 @@ int signal_send(process_t *target, int sig) {
     if (sig == SIGCONT) {
         target->pending_signals &= ~(1 << SIGSTOP);
         if (target->state == PROCESS_SLEEPING) {
-            target->state = PROCESS_READY;
-            scheduler_add(target);
+            scheduler_wake(target);
         }
     }
 
@@ -42,8 +41,7 @@ int signal_send(process_t *target, int sig) {
 
     /* Wake target if sleeping in interruptible wait */
     if (target->state == PROCESS_SLEEPING && sig != SIGSTOP) {
-        target->state = PROCESS_READY;
-        scheduler_add(target);
+        scheduler_wake(target);
     }
 
     return 0;

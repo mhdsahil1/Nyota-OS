@@ -1,6 +1,6 @@
 /* =============================================================================
  * Nyota OS — System Date Utility (/bin/date)
- * Reads kernel wall-clock time and displays current calendar datetime in UTC.
+ * Reads kernel wall-clock time and displays current calendar datetime.
  * =========================================================================== */
 
 #include "libnyota.h"
@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
     uint32_t mins = (uint32_t)((rem % 3600) / 60);
     uint32_t secs = (uint32_t)(rem % 60);
 
-    /* Civil date conversion */
+    /* Civil date conversion (Euclidean affine algorithm) */
     uint64_t z = days + 719468ULL;
     uint64_t era = z / 146097ULL;
     uint64_t doe = z - era * 146097ULL;
@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
     uint64_t m = mp + (mp < 10 ? 3 : -9);
     y += (m <= 2);
 
-    printf("%04d-%02d-%02d %02d:%02d:%02d UTC\n",
+    printf("%04d-%02d-%02d %02d:%02d:%02d\n",
            (int)y, (int)m, (int)d, hours, mins, secs);
 
     return 0;

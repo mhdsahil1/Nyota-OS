@@ -693,6 +693,11 @@ void process_exit(int status) {
         /* Remove from scheduler ready queue */
         scheduler_remove(curr);
         scheduler_request_reschedule();
+
+        /* Never return to userspace; wait for context switch */
+        while (1) {
+            __asm__ volatile ("sti; hlt");
+        }
     }
 }
 
