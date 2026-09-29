@@ -44,6 +44,8 @@ commands = [
 ]
 cmd_idx = 0
 start = time.time()
+logged_in = False
+password_sent = False
 
 while time.time() - start < 40:
     try:
@@ -56,7 +58,15 @@ while time.time() - start < 40:
     except socket.timeout:
         pass
 
-    if output.count(b"nyota$ ") > cmd_idx:
+    if not logged_in and b"login:" in output:
+        time.sleep(0.15)
+        s.sendall(b"sahil\n")
+        logged_in = True
+    elif logged_in and not password_sent and b"Password:" in output:
+        time.sleep(0.15)
+        s.sendall(b"\n")
+        password_sent = True
+    elif (output.count(b"$ ") + output.count(b"nyota$ ")) > cmd_idx and (password_sent or not logged_in):
         if cmd_idx < len(commands):
             c = commands[cmd_idx]
             cmd_idx += 1

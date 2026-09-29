@@ -147,14 +147,13 @@ int spawn(const char *path, char *const argv[]) {
     return (int)syscall2(14, (uint64_t)path, (uint64_t)argv);
 }
 
+#undef waitpid
 int waitpid(int pid, int *status) {
-    while (1) {
-        int64_t ret = syscall3(15, (uint64_t)pid, (uint64_t)status, 0);
-        if (ret != 0) {
-            return (int)ret;
-        }
-        sleep(20);
-    }
+    return (int)syscall3(15, (uint64_t)pid, (uint64_t)status, 0);
+}
+
+int waitpid_options(int pid, int *status, int options) {
+    return (int)syscall3(15, (uint64_t)pid, (uint64_t)status, (uint64_t)options);
 }
 
 int spawn2(const char *path, char *const argv[], int in_fd, int out_fd) {
@@ -320,4 +319,50 @@ char *inet_ntoa(struct in_addr in) {
     }
     *p = '\0';
     return inet_ntoa_buf;
+}
+
+time_t time(time_t *tloc) {
+    return (time_t)syscall1(44, (uint64_t)tloc);
+}
+
+int clock_gettime(int clk_id, struct timespec *tp) {
+    return (int)syscall2(45, (uint64_t)clk_id, (uint64_t)tp);
+}
+
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    return (int)syscall2(46, (uint64_t)req, (uint64_t)rem);
+}
+
+int chdir(const char *path) {
+    return (int)syscall1(47, (uint64_t)path);
+}
+
+char *getcwd(char *buf, size_t size) {
+    int64_t res = syscall2(48, (uint64_t)buf, size);
+    if (res < 0) return NULL;
+    return buf;
+}
+
+int sync(void) {
+    return (int)syscall0(49);
+}
+
+int reboot(int cmd) {
+    return (int)syscall1(50, (uint64_t)cmd);
+}
+
+int klog(int action, char *buf, size_t len) {
+    return (int)syscall3(51, (uint64_t)action, (uint64_t)buf, len);
+}
+
+int sysinfo(sysinfo_data_t *info) {
+    return (int)syscall1(52, (uint64_t)info);
+}
+
+int tty_ctrl(int cmd, uint64_t arg) {
+    return (int)syscall2(53, (uint64_t)cmd, arg);
+}
+
+int execve(const char *path, char *const argv[], char *const envp[]) {
+    return (int)syscall3(54, (uint64_t)path, (uint64_t)argv, (uint64_t)envp);
 }

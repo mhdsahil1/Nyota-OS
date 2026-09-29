@@ -18,11 +18,23 @@ static uint32_t timer_frequency = PIT_DEFAULT_HZ;
 #include "scheduler.h"
 
 extern void net_timer_tick(void);
+extern void clock_on_timer_tick(void);
+extern void tty_handle_key(char c);
+extern bool serial_has_data(void);
+extern char serial_getchar(void);
 
 static void timer_irq_handler(interrupt_frame_t *frame) {
     (void)frame;
     timer_tick_count++;
 
+    /* Drain incoming serial data directly to active TTY */
+    while (serial_has_data()) {
+        char sc = serial_getchar();
+        if (sc == '\r') sc = '\n';
+        tty_handle_key(sc);
+    }
+
+    clock_on_timer_tick();
     net_timer_tick();
 
     if (scheduler_is_active()) {

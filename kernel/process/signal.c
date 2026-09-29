@@ -100,9 +100,9 @@ void signal_check_and_deliver(interrupt_frame_t *frame) {
                 process_exit(128 + sig);
                 return;
             } else {
-                /* Custom handler delivery: Push return RIP and set entry */
+                /* Custom handler delivery: Push return RIP and set entry like a CALL instruction */
                 uint64_t *sp = (uint64_t *)frame->rsp;
-                sp -= 2;
+                sp -= 1;
                 sp[0] = frame->rip;
                 frame->rsp = (uint64_t)sp;
                 frame->rip = (uint64_t)handler;

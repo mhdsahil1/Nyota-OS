@@ -49,7 +49,7 @@ static void pipe_free(pipe_t *pipe) {
 }
 
 int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
-    if (!pipe || !buf) return -SYS_ERR_EFAULT;
+    if (!pipe || !buf) return SYS_ERR_EFAULT;
     if (count == 0) return 0;
 
     process_t *curr = process_get_current();
@@ -60,11 +60,21 @@ int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
             return 0; /* All writers closed -> EOF */
         }
         if (curr) {
+            if (curr->pending_signals & ~curr->blocked_signals) {
+                return SYS_ERR_EINTR;
+            }
             pipe->reader_waiter = curr;
             curr->state = PROCESS_SLEEPING;
             scheduler_remove(curr);
             scheduler_request_reschedule();
+            while (curr->state == PROCESS_SLEEPING && pipe->count == 0 && pipe->writers_count > 0) {
+                __asm__ volatile ("sti; hlt");
+            }
             pipe->reader_waiter = NULL;
+            curr->state = PROCESS_RUNNING;
+            if (pipe->count == 0 && pipe->writers_count > 0 && (curr->pending_signals & ~curr->blocked_signals)) {
+                return SYS_ERR_EINTR;
+            }
         } else {
             break;
         }
@@ -93,7 +103,7 @@ int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
 }
 
 int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
-    if (!pipe || !buf) return -SYS_ERR_EFAULT;
+    if (!pipe || !buf) return SYS_ERR_EFAULT;
     if (count == 0) return 0;
 
     process_t *curr = process_get_current();
@@ -102,7 +112,7 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
         if (curr) {
             signal_send(curr, SIGPIPE);
         }
-        return -SYS_ERR_EPIPE;
+        return SYS_ERR_EPIPE;
     }
 
     const uint8_t *src = (const uint8_t *)buf;
@@ -113,20 +123,30 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
             if (curr) {
                 signal_send(curr, SIGPIPE);
             }
-            return written > 0 ? (int64_t)written : -SYS_ERR_EPIPE;
+            return written > 0 ? (int64_t)written : SYS_ERR_EPIPE;
         }
 
         while (pipe->count == PIPE_CAPACITY) {
             if (pipe->readers_count == 0) {
                 if (curr) signal_send(curr, SIGPIPE);
-                return written > 0 ? (int64_t)written : -SYS_ERR_EPIPE;
+                return written > 0 ? (int64_t)written : SYS_ERR_EPIPE;
             }
             if (curr) {
+                if (curr->pending_signals & ~curr->blocked_signals) {
+                    return written > 0 ? (int64_t)written : SYS_ERR_EINTR;
+                }
                 pipe->writer_waiter = curr;
                 curr->state = PROCESS_SLEEPING;
                 scheduler_remove(curr);
                 scheduler_request_reschedule();
+                while (curr->state == PROCESS_SLEEPING && pipe->count == PIPE_CAPACITY && pipe->readers_count > 0) {
+                    __asm__ volatile ("sti; hlt");
+                }
                 pipe->writer_waiter = NULL;
+                curr->state = PROCESS_RUNNING;
+                if (pipe->count == PIPE_CAPACITY && pipe->readers_count > 0 && (curr->pending_signals & ~curr->blocked_signals)) {
+                    return written > 0 ? (int64_t)written : SYS_ERR_EINTR;
+                }
             } else {
                 break;
             }

@@ -73,6 +73,10 @@ typedef struct process {
     uint64_t runtime_ticks;      /* Total PIT ticks spent in RUNNING state */
     uint64_t context_switches;   /* Number of times scheduled */
 
+    char cwd[128];               /* Current working directory */
+    uint32_t pgrp;               /* Process group ID (for job control) */
+    uint64_t start_time;         /* Process start time in seconds or ticks */
+
     /* Process hierarchy tree */
     struct process *parent;
     struct process *children;
@@ -93,6 +97,9 @@ process_t *process_create_from_elf(const char *path, char *const argv[]);
 process_t *process_spawn_elf(const char *path, char *const argv[]);
 process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int in_fd, int out_fd);
 int process_exec(process_t *proc, const char *path, char *const argv[]);
+int process_execve(process_t *proc, const char *path, char *const argv[], char *const envp[]);
+#define WNOHANG         1
+
 int process_waitpid(int32_t pid, int *status, int options);
 
 typedef struct {

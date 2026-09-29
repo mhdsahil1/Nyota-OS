@@ -29,6 +29,7 @@ void interrupt_unregister_handler(uint8_t vector) {
 }
 
 #include "scheduler.h"
+#include "signal.h"
 
 interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame) {
     if (!frame) return NULL;
@@ -49,6 +50,11 @@ interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame) {
     /* If scheduler is running, perform scheduling & context switch if needed */
     if (scheduler_is_active()) {
         frame = scheduler_schedule(frame);
+    }
+
+    /* Deliver pending signals if returning to Ring 3 */
+    if (frame && (frame->cs & 3) == 3) {
+        signal_check_and_deliver(frame);
     }
 
     return frame;

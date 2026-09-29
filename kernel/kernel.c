@@ -1,5 +1,5 @@
 /* =============================================================================
- * Nyota OS — Kernel Main & Core Subsystems (Phase 6)
+ * Nyota OS — Kernel Main & Core Subsystems (Phase 9)
  * Target: x86_64 Long Mode
  * =========================================================================== */
 
@@ -34,6 +34,9 @@
 #include "security/security.h"
 #include "ipc/pipe.h"
 #include "ipc/shm.h"
+#include "time/rtc.h"
+#include "time/clock.h"
+#include "drivers/tty.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -271,28 +274,33 @@ void kernel_main(void) {
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Signals");
-
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_print("[ OK ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Permissions");
-
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_print("[ OK ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Capabilities");
-
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_print("[ OK ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Resource Limits");
+    vga_println("Security");
     vga_println("");
 
-    /* 17. Launch First Userspace Process (/init) */
+    /* 17. Phase 9 Subsystems: RTC, Clock, Logging, TTY */
+    klog_init();
+    klog_write(KLOG_LEVEL_INFO, "Kernel log ring buffer initialized");
+
+    clock_init();
+    klog_write(KLOG_LEVEL_INFO, "Clock subsystem initialized (RTC + monotonic)");
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("RTC");
+
+    tty_init();
+    klog_write(KLOG_LEVEL_INFO, "TTY subsystem initialized");
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("TTY");
+    vga_println("");
+
+    /* 18. Launch First Userspace Process (/init) */
+    klog_write(KLOG_LEVEL_INFO, "Launching PID 1 (/init)");
     process_t *init_proc = process_spawn_init();
 
-    /* 18. Start Scheduler & Enter Multitasking */
+    /* 19. Start Scheduler & Enter Multitasking */
     if (init_proc) {
         process_run(init_proc);
         /* Idle kernel thread while userspace is active */

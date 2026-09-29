@@ -177,6 +177,19 @@ static void keyboard_irq_handler(interrupt_frame_t *frame) {
 
     /* Push event into circular buffer */
     ring_buffer_push(&ev);
+
+    /* Dispatch to TTY subsystem */
+    extern void tty_handle_key(char c);
+    if (ev.pressed) {
+        if (ev.ctrl) {
+            if (ev.character == 'c' || ev.character == 'C') tty_handle_key(3);
+            else if (ev.character == 'z' || ev.character == 'Z') tty_handle_key(26);
+            else if (ev.character == 'd' || ev.character == 'D') tty_handle_key(4);
+            else if (ev.character == '\\') tty_handle_key(28);
+        } else if (ev.character != 0) {
+            tty_handle_key(ev.character);
+        }
+    }
 }
 
 void keyboard_init(void) {

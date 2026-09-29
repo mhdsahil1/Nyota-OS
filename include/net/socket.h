@@ -12,6 +12,8 @@
 #include "process.h"
 
 #define AF_UNSPEC           0
+#define AF_UNIX             1
+#define AF_LOCAL            1
 #define AF_INET             2
 
 #define SOCK_STREAM         1
@@ -41,6 +43,11 @@ struct sockaddr {
     char     sa_data[14];
 };
 
+struct sockaddr_un {
+    uint16_t sun_family;
+    char     sun_path[108];
+};
+
 struct sockaddr_in {
     uint16_t       sin_family;
     uint16_t       sin_port;
@@ -62,6 +69,10 @@ struct socket {
     uint16_t     local_port;
     uint32_t     remote_ip;
     uint16_t     remote_port;
+
+    /* Unix Domain Socket Support (Phase 9) */
+    char         sun_path[108];
+    struct socket *peer;
 
     /* TCP Sequence & Window Management */
     uint32_t     local_seq;

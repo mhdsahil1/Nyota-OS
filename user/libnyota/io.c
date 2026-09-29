@@ -53,27 +53,36 @@ int getline(char *buf, size_t size) {
     return (int)i;
 }
 
-static void print_dec(int64_t val) {
+static void print_dec_padded(int64_t val, int min_width, char pad_char) {
     if (val < 0) {
         putchar('-');
         val = -val;
-    }
-
-    if (val == 0) {
-        putchar('0');
-        return;
+        if (min_width > 0) min_width--;
     }
 
     char buf[24];
     int i = 0;
-    while (val > 0) {
-        buf[i++] = (char)('0' + (val % 10));
-        val /= 10;
+    if (val == 0) {
+        buf[i++] = '0';
+    } else {
+        while (val > 0) {
+            buf[i++] = (char)('0' + (val % 10));
+            val /= 10;
+        }
+    }
+
+    while (min_width > i) {
+        putchar(pad_char);
+        min_width--;
     }
 
     for (int j = i - 1; j >= 0; j--) {
         putchar(buf[j]);
     }
+}
+
+static void print_dec(int64_t val) {
+    print_dec_padded(val, 0, ' ');
 }
 
 static void print_hex(uint64_t val) {
@@ -107,6 +116,25 @@ int printf(const char *fmt, ...) {
     for (size_t i = 0; fmt[i] != '\0'; i++) {
         if (fmt[i] == '%' && fmt[i + 1] != '\0') {
             i++;
+
+            char pad_char = ' ';
+            if (fmt[i] == '0') {
+                pad_char = '0';
+                i++;
+            }
+
+            int width = 0;
+            while (fmt[i] >= '0' && fmt[i] <= '9') {
+                width = width * 10 + (fmt[i] - '0');
+                i++;
+            }
+
+            /* Optional long prefix (e.g. %ld, %llu) */
+            if (fmt[i] == 'l') {
+                i++;
+                if (fmt[i] == 'l') i++;
+            }
+
             switch (fmt[i]) {
                 case 's': {
                     const char *s = va_arg(args, const char *);
@@ -117,12 +145,12 @@ int printf(const char *fmt, ...) {
                 case 'd':
                 case 'i': {
                     int val = va_arg(args, int);
-                    print_dec(val);
+                    print_dec_padded((int64_t)val, width, pad_char);
                     break;
                 }
                 case 'u': {
                     unsigned int val = va_arg(args, unsigned int);
-                    print_dec((int64_t)val);
+                    print_dec_padded((int64_t)val, width, pad_char);
                     break;
                 }
                 case 'x':

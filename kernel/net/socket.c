@@ -167,7 +167,7 @@ socket_t *socket_find_udp(uint32_t local_ip, uint16_t port) {
 /* ── Lifecycle & Socket Operations ────────────────────────────────────────── */
 
 socket_t *socket_create(int domain, int type, int protocol) {
-    if (domain != AF_INET && domain != AF_UNSPEC) {
+    if (domain != AF_INET && domain != AF_UNSPEC && domain != AF_UNIX) {
         return NULL;
     }
 
@@ -201,6 +201,16 @@ socket_t *socket_create(int domain, int type, int protocol) {
 int socket_bind(socket_t *sock, const struct sockaddr_in *addr) {
     if (!sock || !addr) return -1;
 
+    if (sock->domain == AF_UNIX) {
+        const struct sockaddr_un *un = (const struct sockaddr_un *)addr;
+        size_t plen = strlen(un->sun_path);
+        if (plen >= sizeof(sock->sun_path)) plen = sizeof(sock->sun_path) - 1;
+        memcpy(sock->sun_path, un->sun_path, plen);
+        sock->sun_path[plen] = '\0';
+        sock->is_bound = true;
+        return 0;
+    }
+
     sock->local_ip = addr->sin_addr.s_addr;
     sock->local_port = ntohs(addr->sin_port);
     sock->is_bound = true;
@@ -233,9 +243,13 @@ socket_t *socket_accept(socket_t *sock, struct sockaddr_in *addr) {
                 sock->backlog[--sock->backlog_count] = NULL;
 
                 if (addr) {
-                    addr->sin_family = AF_INET;
-                    addr->sin_port = htons(client->remote_port);
-                    addr->sin_addr.s_addr = client->remote_ip;
+                    if (sock->domain == AF_UNIX) {
+                        addr->sin_family = AF_UNIX;
+                    } else {
+                        addr->sin_family = AF_INET;
+                        addr->sin_port = htons(client->remote_port);
+                        addr->sin_addr.s_addr = client->remote_ip;
+                    }
                 }
 
                 process_t *curr = process_get_current();
@@ -248,6 +262,13 @@ socket_t *socket_accept(socket_t *sock, struct sockaddr_in *addr) {
             }
         }
 
+        process_t *curr = process_get_current();
+        if (curr && curr->pending_signals) {
+            socket_remove_waiter(sock, curr);
+            curr->state = PROCESS_RUNNING;
+            return NULL;
+        }
+
         e1000_poll_rx();
         socket_wait(sock);
     }
@@ -255,6 +276,46 @@ socket_t *socket_accept(socket_t *sock, struct sockaddr_in *addr) {
 
 int socket_connect(socket_t *sock, const struct sockaddr_in *addr) {
     if (!sock || !addr) return -1;
+
+    if (sock->domain == AF_UNIX) {
+        const struct sockaddr_un *un = (const struct sockaddr_un *)addr;
+        socket_t *listener = NULL;
+        for (int i = 0; i < SOCKET_TABLE_MAX; i++) {
+            if (socket_table[i].in_use && socket_table[i].domain == AF_UNIX &&
+                socket_table[i].state == TCP_STATE_LISTEN &&
+                strcmp(socket_table[i].sun_path, un->sun_path) == 0) {
+                listener = &socket_table[i];
+                break;
+            }
+        }
+        if (!listener || listener->backlog_count >= listener->backlog_limit) {
+            return -1;
+        }
+
+        socket_t *server_conn = NULL;
+        for (int i = 0; i < SOCKET_TABLE_MAX; i++) {
+            if (!socket_table[i].in_use) {
+                server_conn = &socket_table[i];
+                memset(server_conn, 0, sizeof(socket_t));
+                server_conn->id = i;
+                server_conn->domain = AF_UNIX;
+                server_conn->type = SOCK_STREAM;
+                server_conn->state = TCP_STATE_ESTABLISHED;
+                server_conn->in_use = true;
+                server_conn->ref_count = 1;
+                break;
+            }
+        }
+        if (!server_conn) return -1;
+
+        server_conn->peer = sock;
+        sock->peer = server_conn;
+        sock->state = TCP_STATE_ESTABLISHED;
+
+        listener->backlog[listener->backlog_count++] = server_conn;
+        socket_wake(listener);
+        return 0;
+    }
 
     sock->remote_ip = addr->sin_addr.s_addr;
     sock->remote_port = ntohs(addr->sin_port);
@@ -315,6 +376,22 @@ int64_t socket_send(socket_t *sock, const void *buf, size_t len, int flags) {
     (void)flags;
     if (!sock || (!buf && len > 0)) return -1;
 
+    if (sock->domain == AF_UNIX) {
+        if (!sock->peer || sock->peer->state != TCP_STATE_ESTABLISHED) {
+            return -1;
+        }
+        socket_t *peer = sock->peer;
+        size_t written = 0;
+        const uint8_t *src = (const uint8_t *)buf;
+        while (written < len && peer->rx_count < SOCKET_BUFFER_SIZE) {
+            peer->rx_buf[peer->rx_head] = src[written++];
+            peer->rx_head = (peer->rx_head + 1) % SOCKET_BUFFER_SIZE;
+            peer->rx_count++;
+        }
+        socket_wake(peer);
+        return (int64_t)written;
+    }
+
     if (sock->type == SOCK_STREAM) {
         if (sock->state != TCP_STATE_ESTABLISHED) {
             return -1;
@@ -351,6 +428,23 @@ int64_t socket_send(socket_t *sock, const void *buf, size_t len, int flags) {
 int64_t socket_recv(socket_t *sock, void *buf, size_t len, int flags) {
     (void)flags;
     if (!sock || !buf || len == 0) return -1;
+
+    if (sock->domain == AF_UNIX) {
+        while (sock->rx_count == 0) {
+            if (!sock->peer || sock->peer->state != TCP_STATE_ESTABLISHED) {
+                return 0; /* Peer closed, EOF */
+            }
+            socket_wait(sock);
+        }
+        size_t to_read = (len < sock->rx_count) ? len : sock->rx_count;
+        uint8_t *dst = (uint8_t *)buf;
+        for (size_t i = 0; i < to_read; i++) {
+            dst[i] = sock->rx_buf[sock->rx_tail];
+            sock->rx_tail = (sock->rx_tail + 1) % SOCKET_BUFFER_SIZE;
+        }
+        sock->rx_count -= to_read;
+        return (int64_t)to_read;
+    }
 
     if (sock->type == SOCK_STREAM) {
         /* Wait while no data is available in buffer */
@@ -492,6 +586,18 @@ int socket_close(socket_t *sock) {
 
     if (sock->ref_count > 1) {
         sock->ref_count--;
+        return 0;
+    }
+
+    if (sock->domain == AF_UNIX) {
+        if (sock->peer) {
+            sock->peer->peer = NULL;
+            socket_wake(sock->peer);
+            sock->peer = NULL;
+        }
+        socket_wake(sock);
+        sock->in_use = false;
+        sock->state = TCP_STATE_CLOSED;
         return 0;
     }
 

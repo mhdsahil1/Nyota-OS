@@ -36,15 +36,25 @@ s.settimeout(0.5)
 output = bytearray()
 start = time.time()
 
-# Read until we see "nyota$ "
-while time.time() - start < 15:
+# Read until we see login prompt, log in, and reach shell prompt
+logged_in = False
+password_sent = False
+while time.time() - start < 20:
     try:
         chunk = s.recv(1024)
         if chunk:
             output.extend(chunk)
             sys.stdout.write(chunk.decode('latin1', errors='replace'))
             sys.stdout.flush()
-            if b"nyota$ " in output:
+            if not logged_in and b"login:" in output:
+                time.sleep(0.15)
+                s.sendall(b"sahil\n")
+                logged_in = True
+            elif logged_in and not password_sent and b"Password:" in output:
+                time.sleep(0.15)
+                s.sendall(b"\n")
+                password_sent = True
+            elif (b"$ " in output or b"nyota$ " in output) and (password_sent or not logged_in):
                 print("\n[TEST] Saw prompt! Sending 'help\\n'...", flush=True)
                 time.sleep(0.1)
                 s.sendall(b"help\n")

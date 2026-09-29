@@ -69,8 +69,24 @@ def send_cmd(command):
     s.sendall(command.encode('latin1') + b"\n")
 
 try:
-    print("[TCP_TEST] Waiting for boot...", flush=True)
-    if not wait_for_pattern(b"nyota$ ", timeout=15):
+    print("[TCP_TEST] Waiting for boot and login...", flush=True)
+    logged_in = False
+    password_sent = False
+    start = time.time()
+    while time.time() - start < 20:
+        if not logged_in and b"login:" in serial_buffer:
+            time.sleep(0.15)
+            s.sendall(b"sahil\n")
+            logged_in = True
+        elif logged_in and not password_sent and b"Password:" in serial_buffer:
+            time.sleep(0.15)
+            s.sendall(b"\n")
+            password_sent = True
+        elif (b"$ " in serial_buffer or b"nyota$ " in serial_buffer) and (password_sent or not logged_in):
+            break
+        time.sleep(0.1)
+
+    if b"$ " not in serial_buffer and b"nyota$ " not in serial_buffer:
         print("\n[TCP_TEST FAIL] Did not reach shell prompt!")
         sys.exit(1)
 

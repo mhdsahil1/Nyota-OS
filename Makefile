@@ -43,6 +43,7 @@ CFLAGS := \
     -fno-asynchronous-unwind-tables\
     -fno-unwind-tables             \
     -mno-red-zone                  \
+    -mno-stack-arg-probe           \
     -mgeneral-regs-only            \
     -Wall                          \
     -Wextra                        \
@@ -62,6 +63,7 @@ USER_CFLAGS := \
     -fno-builtin                   \
     -fno-stack-protector           \
     -mno-red-zone                  \
+    -mno-stack-arg-probe           \
     -mno-sse                       \
     -mno-sse2                      \
     -Wall                          \
@@ -137,7 +139,11 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/random.o           \
     $(BUILD_DIR)/security.o         \
     $(BUILD_DIR)/pipe.o             \
-    $(BUILD_DIR)/shm.o
+    $(BUILD_DIR)/shm.o              \
+    $(BUILD_DIR)/rtc.o              \
+    $(BUILD_DIR)/clock.o            \
+    $(BUILD_DIR)/tty.o              \
+    $(BUILD_DIR)/logging.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -145,26 +151,43 @@ ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 LIBNYOTA := $(BUILD_DIR)/libnyota.a
 
 USER_BINARIES := \
-    fs/root/init         \
-    fs/root/bin/sh       \
-    fs/root/bin/hello    \
-    fs/root/bin/echo     \
-    fs/root/bin/ls       \
-    fs/root/bin/cat      \
-    fs/root/bin/ps       \
-    fs/root/bin/test     \
-    fs/root/bin/ifconfig \
-    fs/root/bin/ping     \
-    fs/root/bin/netstat  \
-    fs/root/bin/nslookup \
-    fs/root/bin/netcat   \
+    fs/root/init            \
+    fs/root/sbin/init       \
+    fs/root/sbin/loggerd    \
+    fs/root/sbin/ttyd       \
+    fs/root/sbin/netd       \
+    fs/root/sbin/logind     \
+    fs/root/bin/sh          \
+    fs/root/bin/service     \
+    fs/root/bin/logger      \
+    fs/root/bin/uname       \
+    fs/root/bin/date        \
+    fs/root/bin/uptime      \
+    fs/root/bin/hostname    \
+    fs/root/bin/sysinfo     \
+    fs/root/bin/free        \
+    fs/root/bin/df          \
+    fs/root/bin/reboot      \
+    fs/root/bin/shutdown    \
+    fs/root/bin/hello       \
+    fs/root/bin/echo        \
+    fs/root/bin/ls          \
+    fs/root/bin/cat         \
+    fs/root/bin/ps          \
+    fs/root/bin/test        \
+    fs/root/bin/ifconfig    \
+    fs/root/bin/ping        \
+    fs/root/bin/netstat     \
+    fs/root/bin/nslookup    \
+    fs/root/bin/netcat      \
     fs/root/bin/echo-server \
-    fs/root/bin/secinfo  \
-    fs/root/bin/kill     \
-    fs/root/bin/ipctest  \
-    fs/root/bin/memtest  \
-    fs/root/bin/crash    \
-    fs/root/bin/stressproc
+    fs/root/bin/secinfo     \
+    fs/root/bin/kill        \
+    fs/root/bin/ipctest     \
+    fs/root/bin/memtest     \
+    fs/root/bin/crash       \
+    fs/root/bin/stressproc  \
+    fs/root/bin/lifecycletest
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
@@ -222,7 +245,11 @@ $(BUILD_DIR)/lib_io.o: user/libnyota/io.c | $(BUILD_DIR)
 	@echo [BUILD] user/libnyota/io.c
 	@$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/lib_io.o
+$(BUILD_DIR)/lib_env.o: user/libnyota/env.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/env.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/lib_io.o $(BUILD_DIR)/lib_env.o
 	@echo [LIB]   $@
 	@$(AR) rcs $@ $^
 
@@ -232,6 +259,12 @@ fs/root/init: user/init/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD
 	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_init.o
 	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/init.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_init.o $(LIBNYOTA)
 	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/init.pe $@
+
+fs/root/sbin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
+	@echo [USER]  /sbin/$*
+	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_$*.o
+	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBNYOTA)
+	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/$*.pe $@
 
 fs/root/bin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
 	@echo [USER]  /bin/$*
@@ -466,6 +499,22 @@ $(BUILD_DIR)/pipe.o: kernel/ipc/pipe.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/shm.o: kernel/ipc/shm.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/ipc/shm.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/rtc.o: kernel/time/rtc.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/time/rtc.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/clock.o: kernel/time/clock.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/time/clock.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tty.o: kernel/drivers/tty.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/drivers/tty.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/logging.o: kernel/logging.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/logging.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────

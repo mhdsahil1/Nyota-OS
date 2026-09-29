@@ -57,11 +57,36 @@ def send_cmd(command):
     s.sendall(command.encode('latin1') + b"\n")
 
 try:
-    print("[TCP_INTERNAL] Waiting for boot...", flush=True)
-    boot_out = read_until(b"nyota$ ", timeout=15)
-    if b"nyota$ " not in boot_out:
+    print("[TCP_INTERNAL] Waiting for boot and login...", flush=True)
+    boot_out = bytearray()
+    start = time.time()
+    logged_in = False
+    password_sent = False
+    while time.time() - start < 20:
+        try:
+            chunk = s.recv(1024)
+            if chunk:
+                boot_out.extend(chunk)
+                sys.stdout.write(chunk.decode('latin1', errors='replace'))
+                sys.stdout.flush()
+                if not logged_in and b"login:" in boot_out:
+                    time.sleep(0.15)
+                    s.sendall(b"sahil\n")
+                    logged_in = True
+                elif logged_in and not password_sent and b"Password:" in boot_out:
+                    time.sleep(0.15)
+                    s.sendall(b"\n")
+                    password_sent = True
+                elif (b"$ " in boot_out or b"nyota$ " in boot_out) and (password_sent or not logged_in):
+                    break
+        except socket.timeout:
+            pass
+
+    if b"$ " not in boot_out and b"nyota$ " not in boot_out:
         print("\n[FAIL] Did not reach shell prompt!")
         sys.exit(1)
+
+    prompt = b"$ " if b"$ " in boot_out else b"nyota$ "
 
     # 1. Start echo server in background
     send_cmd("echo-server 8080 &")
@@ -70,7 +95,7 @@ try:
 
     # 2. Run netcat connecting to 127.0.0.1:8080
     send_cmd("netcat 127.0.0.1 8080 TestMessage123")
-    out = read_until(b"nyota$ ", timeout=10)
+    out = read_until(prompt, timeout=10)
 
     if b"Received: TestMessage123" in out or b"TestMessage123" in out:
         print("\n[PASS] Internal TCP client/server communication verified successfully!")

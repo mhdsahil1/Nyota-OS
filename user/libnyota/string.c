@@ -77,3 +77,49 @@ void *memset(void *s, int c, size_t n) {
     }
     return s;
 }
+
+char *strchr(const char *s, int c) {
+    if (!s) return NULL;
+    while (*s != '\0') {
+        if (*s == (char)c) return (char *)s;
+        s++;
+    }
+    return (c == '\0') ? (char *)s : NULL;
+}
+
+char *strcat(char *dest, const char *src) {
+    if (!dest || !src) return dest;
+    char *d = dest;
+    while (*d != '\0') d++;
+    while ((*d++ = *src++) != '\0') {}
+    return dest;
+}
+
+char *strncat(char *dest, const char *src, size_t n) {
+    if (!dest || !src || n == 0) return dest;
+    char *d = dest;
+    while (*d != '\0') d++;
+    while (n-- > 0 && *src != '\0') {
+        *d++ = *src++;
+    }
+    *d = '\0';
+    return dest;
+}
+
+int atoi(const char *s) {
+    if (!s) return 0;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    int sign = 1;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
+    int res = 0;
+    while (*s >= '0' && *s <= '9') {
+        res = res * 10 + (*s - '0');
+        s++;
+    }
+    return res * sign;
+}

@@ -54,12 +54,46 @@
 #define SYS_SPAWN2          41
 #define SYS_SECINFO         42
 #define SYS_GETPROCS        43
+#define SYS_TIME            44
+#define SYS_CLOCK_GETTIME   45
+#define SYS_NANOSLEEP       46
+#define SYS_CHDIR           47
+#define SYS_GETCWD          48
+#define SYS_SYNC            49
+#define SYS_REBOOT          50
+#define SYS_KLOG            51
+#define SYS_SYSINFO         52
+#define SYS_TTY_CTRL        53
+#define SYS_EXECVE          54
+
+/* waitpid Options */
+#define WNOHANG             1
+
+/* Reboot Commands */
+#define REBOOT_CMD_HALT     0
+#define REBOOT_CMD_REBOOT   1
+#define REBOOT_CMD_POWEROFF 2
+
+/* TTY Control Commands */
+#define TTY_CTRL_GET_PGRP   1
+#define TTY_CTRL_SET_PGRP   2
+
+typedef struct {
+    uint64_t uptime_sec;
+    uint64_t total_ram;
+    uint64_t free_ram;
+    uint64_t used_ram;
+    uint32_t process_count;
+    char     kernel_ver[16];
+    char     machine[16];
+} sysinfo_data_t;
 
 /* Syscall Error Codes */
 #define SYS_ERR_NONE        0
 #define SYS_ERR_EPERM       (-1)   /* Operation not permitted */
 #define SYS_ERR_ENOENT      (-2)   /* No such file or directory */
 #define SYS_ERR_ESRCH       (-3)   /* No such process */
+#define SYS_ERR_EINTR       (-4)   /* Interrupted system call */
 #define SYS_ERR_EIO         (-5)   /* I/O error */
 #define SYS_ERR_ENOEXEC     (-8)   /* Exec format error */
 #define SYS_ERR_EBADF       (-9)   /* Bad file descriptor */
@@ -75,6 +109,7 @@
 #define SYS_ERR_EINVAL      (-22)  /* Invalid argument */
 #define SYS_ERR_ENOSPC      (-28)  /* No space left on device */
 #define SYS_ERR_EPIPE       (-32)  /* Broken pipe */
+#define SYS_ERR_ERANGE      (-34)  /* Numerical result out of range */
 #define SYS_ERR_ENOSYS      (-38)  /* Function not implemented */
 #define SYS_ERR_ENETDOWN    (-100)
 #define SYS_ERR_ENETUNREACH (-101)

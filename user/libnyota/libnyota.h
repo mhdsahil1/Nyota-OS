@@ -85,7 +85,36 @@ int sleep(uint64_t ms);
 int exec(const char *path, char *const argv[]);
 int spawn(const char *path, char *const argv[]);
 int spawn2(const char *path, char *const argv[], int in_fd, int out_fd);
+#define WNOHANG         1
+
 int waitpid(int pid, int *status);
+int waitpid_options(int pid, int *status, int options);
+
+#define _WAITPID_2(p, s) waitpid((p), (s))
+#define _WAITPID_3(p, s, o) waitpid_options((p), (s), (o))
+#define _WAITPID_GET(_1, _2, _3, NAME, ...) NAME
+#define waitpid(...) _WAITPID_GET(__VA_ARGS__, _WAITPID_3, _WAITPID_2)(__VA_ARGS__)
+
+/* Error Numbers */
+#define EPERM           1
+#define ENOENT          2
+#define ESRCH           3
+#define EINTR           4
+#define EIO             5
+#define ENOEXEC         8
+#define EBADF           9
+#define ECHILD          10
+#define EAGAIN          11
+#define ENOMEM          12
+#define EACCES          13
+#define EFAULT          14
+#define EEXIST          17
+#define ENODEV          19
+#define ENOTDIR         20
+#define EISDIR          21
+#define EINVAL          22
+#define ENOSPC          28
+#define EPIPE           32
 
 /* Signals */
 #define SIGHUP          1
@@ -172,6 +201,14 @@ int getprocs(proc_info_t *buf, size_t max_count);
 #define SHUT_WR         1
 #define SHUT_RDWR       2
 
+#define AF_UNIX         1
+#define AF_LOCAL        1
+
+struct sockaddr_un {
+    uint16_t sun_family;
+    char     sun_path[108];
+};
+
 /* BSD Socket Address Structures */
 struct in_addr {
     uint32_t s_addr;
@@ -225,12 +262,67 @@ int64_t sendto(int fd, const void *buf, size_t len, int flags, const struct sock
 int64_t recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *src_addr, size_t *addrlen);
 int     shutdown(int fd, int how);
 
+/* Time Subsystem Types & Constants */
+typedef int64_t time_t;
+
+#ifndef _STRUCT_TIMESPEC_DEFINED
+#define _STRUCT_TIMESPEC_DEFINED
+struct timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+typedef struct timespec timespec_t;
+#endif
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
+#define REBOOT_CMD_HALT     0
+#define REBOOT_CMD_REBOOT   1
+#define REBOOT_CMD_POWEROFF 2
+
+#define TTY_CTRL_GET_PGRP   1
+#define TTY_CTRL_SET_PGRP   2
+
+typedef struct {
+    uint64_t uptime_sec;
+    uint64_t total_ram;
+    uint64_t free_ram;
+    uint64_t used_ram;
+    uint32_t process_count;
+    char     kernel_ver[16];
+    char     machine[16];
+} sysinfo_data_t;
+
+/* Phase 9 System Calls */
+time_t  time(time_t *tloc);
+int     clock_gettime(int clk_id, struct timespec *tp);
+int     nanosleep(const struct timespec *req, struct timespec *rem);
+int     chdir(const char *path);
+char   *getcwd(char *buf, size_t size);
+int     sync(void);
+int     reboot(int cmd);
+int     klog(int action, char *buf, size_t len);
+int     sysinfo(sysinfo_data_t *info);
+int     tty_ctrl(int cmd, uint64_t arg);
+int     execve(const char *path, char *const argv[], char *const envp[]);
+
+/* Environment Variables */
+extern char **environ;
+char *getenv(const char *name);
+int   setenv(const char *name, const char *value, int overwrite);
+int   unsetenv(const char *name);
+
 /* String & Memory Functions */
 size_t strlen(const char *s);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 char *strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t n);
+char *strcat(char *dest, const char *src);
+char *strncat(char *dest, const char *src, size_t n);
+char *strchr(const char *s, int c);
+int   atoi(const char *s);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 

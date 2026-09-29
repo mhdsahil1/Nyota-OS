@@ -47,6 +47,8 @@
 #define NYOTA_EISDIR       -21
 #define NYOTA_EINVAL       -22
 #define NYOTA_ENOSPC       -28
+#define NYOTA_ERANGE       -34
+#define NYOTA_ENAMETOOLONG -36
 #define NYOTA_ENOSYS       -38
 
 typedef enum {
@@ -114,5 +116,10 @@ int vfs_readdir(int fd, vfs_dirent_t *dirp);
 int vfs_mkdir(const char *path, int mode);
 int vfs_chmod(const char *path, uint32_t mode);
 int vfs_chown(const char *path, uint32_t uid, uint32_t gid);
+
+int vfs_normalize_path(const char *in_path, char *out_path, size_t max_len);
+int vfs_chdir(const char *path);
+int vfs_getcwd(char *buf, size_t size);
+int vfs_sync(void);
 
 #endif /* NYOTA_FS_VFS_H */

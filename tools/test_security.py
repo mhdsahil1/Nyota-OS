@@ -33,9 +33,11 @@ if not connected:
 
 s.settimeout(0.5)
 
-def wait_for_prompt(s, timeout=10):
+def wait_for_prompt(s, timeout=20):
     buf = bytearray()
     start = time.time()
+    logged_in = False
+    password_sent = False
     while time.time() - start < timeout:
         try:
             chunk = s.recv(1024)
@@ -43,7 +45,15 @@ def wait_for_prompt(s, timeout=10):
                 buf.extend(chunk)
                 sys.stdout.write(chunk.decode('latin1', errors='replace'))
                 sys.stdout.flush()
-                if b"nyota$ " in buf:
+                if not logged_in and b"login:" in buf:
+                    time.sleep(0.15)
+                    s.sendall(b"sahil\n")
+                    logged_in = True
+                elif logged_in and not password_sent and b"Password:" in buf:
+                    time.sleep(0.15)
+                    s.sendall(b"\n")
+                    password_sent = True
+                elif (b"$ " in buf or b"nyota$ " in buf) and (password_sent or not logged_in):
                     return buf
         except socket.timeout:
             pass
@@ -62,14 +72,14 @@ def send_command(s, cmd_str, timeout=6):
                 buf.extend(chunk)
                 sys.stdout.write(chunk.decode('latin1', errors='replace'))
                 sys.stdout.flush()
-                if b"nyota$ " in buf:
+                if b"$ " in buf or b"nyota$ " in buf:
                     break
         except socket.timeout:
             pass
     return buf.decode('latin1', errors='replace')
 
 # 1. Wait for initial boot
-initial_out = wait_for_prompt(s, 15).decode('latin1', errors='replace')
+initial_out = wait_for_prompt(s, 20).decode('latin1', errors='replace')
 
 checks = {}
 
@@ -110,7 +120,7 @@ checks["ps_has_echo_server"] = "echo-server" in ps2_out
 crash_out = send_command(s, "crash\n")
 checks["crash_page_fault"] = "page fault" in crash_out.lower()
 checks["crash_sigsegv"] = "sigsegv" in crash_out.lower() or "11" in crash_out
-checks["crash_kernel_survived"] = "nyota$ " in crash_out
+checks["crash_kernel_survived"] = ("nyota$ " in crash_out) or ("$ " in crash_out)
 
 # 9. Test memtest
 mem_out = send_command(s, "memtest\n")

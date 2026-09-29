@@ -22,6 +22,8 @@
 #include "security/random.h"
 #include "security/capability.h"
 #include "ipc/shm.h"
+#include "timer.h"
+#include "syscall.h"
 
 static process_t *process_table[PROCESS_MAX_COUNT] = {0};
 static process_t process_table_storage[PROCESS_MAX_COUNT];
@@ -96,7 +98,7 @@ size_t process_count(void) {
 
 /* ── Stack Setup Helper for argc / argv ───────────────────────────────────── */
 
-static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const char *path, char *const argv[], int *out_argc, uint64_t *out_user_argv) {
+static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const char *path, char *const argv[], char *const envp[], int *out_argc, uint64_t *out_user_argv, uint64_t *out_user_envp) {
     /* Determine top physical frame */
     uint64_t top_page_vaddr = stack_top - PAGE_SIZE;
     uint64_t top_page_phys = paging_get_physical_in(pml4, top_page_vaddr);
@@ -113,13 +115,45 @@ static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const c
         argc = 1;
     }
 
+    /* Count envc */
+    int envc = 0;
+    static const char *default_envp[] = {
+        "PATH=/bin:/sbin",
+        "USER=sahil",
+        "HOME=/home/sahil",
+        "SHELL=/bin/sh",
+        "TERM=nyota",
+        NULL
+    };
+    char *const *active_envp = envp;
+    if (!active_envp || !active_envp[0]) {
+        active_envp = (char *const *)default_envp;
+    }
+    while (active_envp[envc] != NULL && envc < 32) {
+        envc++;
+    }
+
     /* Stack pointer starts at top of stack page */
     uint64_t user_rsp = stack_top;
     uint32_t offset = PAGE_SIZE;
 
     uint64_t arg_user_addrs[32];
+    uint64_t env_user_addrs[32];
 
-    /* Copy strings to stack in reverse */
+    /* Copy env strings to stack in reverse */
+    for (int i = envc - 1; i >= 0; i--) {
+        const char *estr = active_envp[i];
+        size_t len = strlen(estr) + 1;
+        if (offset < len) return 0;
+
+        offset -= (uint32_t)len;
+        user_rsp -= len;
+
+        memcpy((void *)(top_page_phys + offset), estr, len);
+        env_user_addrs[i] = user_rsp;
+    }
+
+    /* Copy arg strings to stack in reverse */
     for (int i = argc - 1; i >= 0; i--) {
         const char *arg_str = (argv && argv[i]) ? argv[i] : path;
         size_t len = strlen(arg_str) + 1;
@@ -139,6 +173,19 @@ static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const c
         offset -= (uint32_t)rem;
     }
 
+    /* Push envp[envc] = NULL */
+    user_rsp -= 8;
+    offset -= 8;
+    *(uint64_t *)(top_page_phys + offset) = 0;
+
+    /* Push envp[i] pointers */
+    for (int i = envc - 1; i >= 0; i--) {
+        user_rsp -= 8;
+        offset -= 8;
+        *(uint64_t *)(top_page_phys + offset) = env_user_addrs[i];
+    }
+    uint64_t user_envp_ptr = user_rsp;
+
     /* Push argv[argc] = NULL */
     user_rsp -= 8;
     offset -= 8;
@@ -150,7 +197,6 @@ static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const c
         offset -= 8;
         *(uint64_t *)(top_page_phys + offset) = arg_user_addrs[i];
     }
-
     uint64_t user_argv_ptr = user_rsp;
 
     /* 16-byte align for System V ABI */
@@ -161,6 +207,7 @@ static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const c
 
     if (out_argc) *out_argc = argc;
     if (out_user_argv) *out_user_argv = user_argv_ptr;
+    if (out_user_envp) *out_user_envp = user_envp_ptr;
 
     return user_rsp;
 }
@@ -370,16 +417,17 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
 
     proc->entry_point = entry_point;
 
-    /* Setup argc / argv on user stack */
+    /* Setup argc / argv / envp on user stack */
     int argc = 0;
     uint64_t user_argv = 0;
-    uint64_t user_rsp = setup_user_stack(pml4, stack_top, path, argv, &argc, &user_argv);
+    uint64_t user_envp = 0;
+    uint64_t user_rsp = setup_user_stack(pml4, stack_top, path, argv, NULL, &argc, &user_argv, &user_envp);
     if (user_rsp == 0) {
         user_rsp = stack_top - 16;
     }
     proc->user_stack_top = user_rsp;
 
-    /* Inherit credentials, permissions & resource limits */
+    /* Inherit credentials, permissions, working dir & resource limits */
     if (curr) {
         process_add_child(curr, proc);
         proc->uid = curr->uid;
@@ -389,6 +437,16 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
         proc->max_open_files = curr->max_open_files ? curr->max_open_files : MAX_PROCESS_FDS;
         proc->max_processes = curr->max_processes ? curr->max_processes : 16;
         proc->max_sockets = curr->max_sockets ? curr->max_sockets : 16;
+        proc->pgrp = curr->pgrp ? curr->pgrp : proc->pid;
+        if (curr->cwd[0] != '\0') {
+            size_t clen = strlen(curr->cwd);
+            if (clen >= sizeof(proc->cwd)) clen = sizeof(proc->cwd) - 1;
+            memcpy(proc->cwd, curr->cwd, clen);
+            proc->cwd[clen] = '\0';
+        } else {
+            proc->cwd[0] = '/';
+            proc->cwd[1] = '\0';
+        }
     } else {
         proc->parent = NULL;
         proc->parent_pid = 0;
@@ -399,7 +457,11 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
         proc->max_open_files = MAX_PROCESS_FDS;
         proc->max_processes = 16;
         proc->max_sockets = 16;
+        proc->pgrp = proc->pid;
+        proc->cwd[0] = '/';
+        proc->cwd[1] = '\0';
     }
+    proc->start_time = timer_uptime_sec();
 
     signal_init_process(proc);
     shm_process_init(proc);
@@ -415,6 +477,7 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     frame->ss = GDT_USER_DATA_SEG | 3;
     frame->rdi = (uint64_t)argc;
     frame->rsi = user_argv;
+    frame->rdx = user_envp;
     frame->vector = 0x20;
 
     proc->saved_rsp = (uint64_t)frame;
@@ -458,7 +521,7 @@ process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int 
     return proc;
 }
 
-int process_exec(process_t *proc, const char *path, char *const argv[]) {
+int process_execve(process_t *proc, const char *path, char *const argv[], char *const envp[]) {
     if (!proc || !path) return NYOTA_EINVAL;
 
     nyota_fs_t *fs = vfs_get_root_fs();
@@ -492,10 +555,11 @@ int process_exec(process_t *proc, const char *path, char *const argv[]) {
         return elf_status;
     }
 
-    /* Setup argc / argv */
+    /* Setup argc / argv / envp */
     int argc = 0;
     uint64_t user_argv = 0;
-    uint64_t user_rsp = setup_user_stack(new_pml4, stack_top, path, argv, &argc, &user_argv);
+    uint64_t user_envp = 0;
+    uint64_t user_rsp = setup_user_stack(new_pml4, stack_top, path, argv, envp, &argc, &user_argv, &user_envp);
     if (user_rsp == 0) user_rsp = stack_top - 16;
 
     /* Switch process to new address space */
@@ -524,55 +588,78 @@ int process_exec(process_t *proc, const char *path, char *const argv[]) {
         frame->rsp = user_rsp;
         frame->rdi = (uint64_t)argc;
         frame->rsi = user_argv;
+        frame->rdx = user_envp;
         frame->rax = 0;
     }
 
     return NYOTA_OK;
 }
 
+int process_exec(process_t *proc, const char *path, char *const argv[]) {
+    return process_execve(proc, path, argv, NULL);
+}
+
 int process_waitpid(int32_t pid, int *status, int options) {
-    (void)options;
     process_t *curr = process_get_current();
     if (!curr) return -NYOTA_EINVAL;
 
-    bool has_children = false;
-    process_t *target_child = NULL;
+    while (1) {
+        bool has_children = false;
+        process_t *target_child = NULL;
 
-    for (process_t *c = curr->children; c != NULL; c = c->next_sibling) {
-        if (pid == -1 || (int32_t)c->pid == pid) {
-            has_children = true;
-            if (c->state == PROCESS_ZOMBIE || c->state == PROCESS_TERMINATED) {
-                target_child = c;
-                break;
+        for (process_t *c = curr->children; c != NULL; c = c->next_sibling) {
+            if (pid == -1 || (int32_t)c->pid == pid) {
+                has_children = true;
+                if (c->state == PROCESS_ZOMBIE || c->state == PROCESS_TERMINATED) {
+                    target_child = c;
+                    break;
+                }
             }
         }
-    }
 
-    if (target_child) {
-        int exit_val = target_child->exit_status;
-        uint32_t reaped_pid = target_child->pid;
-        if (status) {
-            *status = exit_val;
-        }
-
-        process_remove_child(curr, target_child);
-
-        for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
-            if (process_table[i] == target_child) {
-                process_table[i] = NULL;
-                process_slot_in_use[i] = false;
-                break;
+        if (target_child) {
+            int exit_val = target_child->exit_status;
+            uint32_t reaped_pid = target_child->pid;
+            if (status) {
+                *status = exit_val;
             }
+
+            process_remove_child(curr, target_child);
+
+            for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
+                if (process_table[i] == target_child) {
+                    process_table[i] = NULL;
+                    process_slot_in_use[i] = false;
+                    break;
+                }
+            }
+            return (int)reaped_pid;
         }
-        return (int)reaped_pid;
-    }
 
-    if (!has_children) {
-        return -10; /* ECHILD */
-    }
+        if (!has_children) {
+            return -10; /* ECHILD */
+        }
 
-    /* Child is still running */
-    return 0;
+        /* If non-blocking requested, return 0 immediately */
+        if (options & WNOHANG) {
+            return 0;
+        }
+
+        /* Check for pending signals */
+        if (curr->pending_signals & ~curr->blocked_signals) {
+            return -4; /* EINTR */
+        }
+
+        /* Block until a child terminates and wakes us */
+        curr->state = PROCESS_SLEEPING;
+        scheduler_remove(curr);
+        scheduler_request_reschedule();
+
+        while (curr->state == PROCESS_SLEEPING) {
+            __asm__ volatile ("sti; hlt");
+        }
+        curr->state = PROCESS_RUNNING;
+    }
 }
 
 void process_exit(int status) {
@@ -698,10 +785,14 @@ process_t *process_spawn_init(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_print("[INFO]  ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Loading /init");
+    vga_println("Loading /sbin/init");
 
-    /* Try loading real ELF binary from filesystem */
-    process_t *proc = process_create_from_elf("/init", NULL);
+    /* Try loading real ELF binary from canonical path /sbin/init */
+    process_t *proc = process_create_from_elf("/sbin/init", NULL);
+    if (!proc) {
+        /* Fallback to /init */
+        proc = process_create_from_elf("/init", NULL);
+    }
     if (proc) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_print("[ OK ]  ");
@@ -718,8 +809,8 @@ process_t *process_spawn_init(void) {
         return proc;
     }
 
-    /* Fallback if /init is not present on disk (Phase 5 fallback) */
-    kwarn("process_spawn_init: /init not found on disk, falling back to embedded init");
+    /* Fallback if /sbin/init and /init are not present on disk (Phase 5 fallback) */
+    kwarn("process_spawn_init: /sbin/init not found on disk, falling back to embedded init");
     const void *blob = user_get_prog_a();
     proc = process_create("init", USER_CODE_BASE, blob, USER_PROGRAM_BLOB_SIZE);
     return proc;

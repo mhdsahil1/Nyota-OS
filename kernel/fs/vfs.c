@@ -14,6 +14,7 @@
 #include "serial.h"
 #include "keyboard.h"
 #include "kernel.h"
+#include "drivers/tty.h"
 
 static nyota_fs_t root_filesystem;
 static bool root_mounted = false;
@@ -170,6 +171,97 @@ static file_t *get_process_file(int fd) {
     return curr->fds[fd];
 }
 
+/* ── Path Normalization (Phase 9) ────────────────────────────────────────── */
+
+int vfs_normalize_path(const char *in_path, char *out_path, size_t max_len) {
+    if (!in_path || !out_path || max_len == 0) return NYOTA_EINVAL;
+
+    char combined[256];
+    combined[0] = '\0';
+
+    if (in_path[0] == '/') {
+        size_t l = strlen(in_path);
+        if (l >= sizeof(combined)) l = sizeof(combined) - 1;
+        memcpy(combined, in_path, l);
+        combined[l] = '\0';
+    } else {
+        process_t *curr = process_get_current();
+        const char *cwd = (curr && curr->cwd[0]) ? curr->cwd : "/";
+        size_t cwd_len = strlen(cwd);
+        if (cwd_len == 1 && cwd[0] == '/') {
+            combined[0] = '/';
+            size_t l = strlen(in_path);
+            if (l >= sizeof(combined) - 2) l = sizeof(combined) - 2;
+            memcpy(combined + 1, in_path, l);
+            combined[1 + l] = '\0';
+        } else {
+            size_t l1 = cwd_len;
+            if (l1 >= sizeof(combined) - 1) l1 = sizeof(combined) - 1;
+            memcpy(combined, cwd, l1);
+            combined[l1] = '\0';
+            if (l1 + 1 < sizeof(combined)) {
+                combined[l1] = '/';
+                size_t l2 = strlen(in_path);
+                if (l1 + 1 + l2 >= sizeof(combined)) l2 = sizeof(combined) - l1 - 2;
+                memcpy(combined + l1 + 1, in_path, l2);
+                combined[l1 + 1 + l2] = '\0';
+            }
+        }
+    }
+
+    /* Stack-based token normalization */
+    char *parts[32];
+    int part_count = 0;
+    char temp[256];
+    size_t clen = strlen(combined);
+    if (clen >= sizeof(temp)) clen = sizeof(temp) - 1;
+    memcpy(temp, combined, clen);
+    temp[clen] = '\0';
+
+    char *token = temp;
+    while (*token == '/') token++;
+
+    while (*token != '\0') {
+        char *end = token;
+        while (*end != '\0' && *end != '/') end++;
+        bool is_last = (*end == '\0');
+        *end = '\0';
+
+        if (strcmp(token, ".") == 0 || strlen(token) == 0) {
+            /* ignore */
+        } else if (strcmp(token, "..") == 0) {
+            if (part_count > 0) part_count--;
+        } else {
+            if (part_count < 32) {
+                parts[part_count++] = token;
+            }
+        }
+
+        if (is_last) break;
+        token = end + 1;
+        while (*token == '/') token++;
+    }
+
+    if (part_count == 0) {
+        if (max_len < 2) return NYOTA_ENAMETOOLONG;
+        out_path[0] = '/';
+        out_path[1] = '\0';
+        return NYOTA_OK;
+    }
+
+    size_t out_idx = 0;
+    for (int i = 0; i < part_count; i++) {
+        if (out_idx + 1 >= max_len) return NYOTA_ENAMETOOLONG;
+        out_path[out_idx++] = '/';
+        size_t plen = strlen(parts[i]);
+        if (out_idx + plen >= max_len) return NYOTA_ENAMETOOLONG;
+        memcpy(out_path + out_idx, parts[i], plen);
+        out_idx += plen;
+    }
+    out_path[out_idx] = '\0';
+    return NYOTA_OK;
+}
+
 /* ── File Operations ──────────────────────────────────────────────────────── */
 
 int vfs_open(const char *path, int flags, int mode) {
@@ -179,8 +271,13 @@ int vfs_open(const char *path, int flags, int mode) {
     process_t *curr = process_get_current();
     if (!curr) return NYOTA_EBADF;
 
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
     /* Check for device files */
-    if (strcmp(path, "/dev/console") == 0 || strcmp(path, "dev/console") == 0) {
+    if (strcmp(use_path, "/dev/console") == 0 || strcmp(use_path, "dev/console") == 0 ||
+        strcmp(use_path, "/dev/tty") == 0 || strncmp(use_path, "/dev/tty", 8) == 0) {
         file_t *f = alloc_file_object();
         if (!f) return NYOTA_ENOMEM;
         f->type = FILE_TYPE_DEV_CONSOLE;
@@ -190,7 +287,7 @@ int vfs_open(const char *path, int flags, int mode) {
         return fd;
     }
 
-    if (strcmp(path, "/dev/null") == 0 || strcmp(path, "dev/null") == 0) {
+    if (strcmp(use_path, "/dev/null") == 0 || strcmp(use_path, "dev/null") == 0) {
         file_t *f = alloc_file_object();
         if (!f) return NYOTA_ENOMEM;
         f->type = FILE_TYPE_DEV_NULL;
@@ -203,11 +300,11 @@ int vfs_open(const char *path, int flags, int mode) {
     if (!root_mounted) return NYOTA_ENODEV;
 
     uint64_t inode_num = 0;
-    int res = nyotafs_resolve_path(&root_filesystem, path, &inode_num);
+    int res = nyotafs_resolve_path(&root_filesystem, use_path, &inode_num);
 
     if (res != 0) {
         if (flags & O_CREAT) {
-            res = nyotafs_create_file(&root_filesystem, path, 0755, &inode_num);
+            res = nyotafs_create_file(&root_filesystem, use_path, 0755, &inode_num);
             if (res != 0) return NYOTA_ENOENT;
         } else {
             return NYOTA_ENOENT;
@@ -329,7 +426,11 @@ int64_t vfs_read(int fd, void *buf, size_t count) {
     }
 
     if (f->type == FILE_TYPE_DEV_CONSOLE) {
-        /* Read interactively from keyboard */
+        tty_t *tty = tty_get_current();
+        if (tty) {
+            return tty_read(tty, buf, count);
+        }
+        /* Fallback interactively from keyboard */
         char *dst = (char *)buf;
         size_t n = 0;
         while (n < count) {
@@ -396,6 +497,10 @@ int64_t vfs_write(int fd, const void *buf, size_t count) {
     }
 
     if (f->type == FILE_TYPE_DEV_CONSOLE) {
+        tty_t *tty = tty_get_current();
+        if (tty) {
+            return tty_write(tty, buf, count);
+        }
         const char *src = (const char *)buf;
         for (size_t i = 0; i < count; i++) {
             vga_putchar(src[i]);
@@ -476,8 +581,12 @@ int vfs_stat(const char *path, vfs_stat_t *st) {
     if (!path || !st) return NYOTA_EFAULT;
     if (!root_mounted) return NYOTA_ENODEV;
 
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
     uint64_t inode_num = 0;
-    if (nyotafs_resolve_path(&root_filesystem, path, &inode_num) != 0) {
+    if (nyotafs_resolve_path(&root_filesystem, use_path, &inode_num) != 0) {
         return NYOTA_ENOENT;
     }
 
@@ -577,7 +686,12 @@ int vfs_readdir(int fd, vfs_dirent_t *dirp) {
 int vfs_mkdir(const char *path, int mode) {
     if (!path) return NYOTA_EFAULT;
     if (!root_mounted) return NYOTA_ENODEV;
-    return nyotafs_mkdir(&root_filesystem, path, (uint32_t)mode, NULL);
+
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
+    return nyotafs_mkdir(&root_filesystem, use_path, (uint32_t)mode, NULL);
 }
 
 int vfs_chmod(const char *path, uint32_t mode) {
@@ -586,8 +700,12 @@ int vfs_chmod(const char *path, uint32_t mode) {
     process_t *curr = process_get_current();
     if (!curr) return NYOTA_EBADF;
 
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
     uint64_t inode_num = 0;
-    if (nyotafs_resolve_path(&root_filesystem, path, &inode_num) != 0) {
+    if (nyotafs_resolve_path(&root_filesystem, use_path, &inode_num) != 0) {
         return NYOTA_ENOENT;
     }
 
@@ -619,8 +737,12 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
         return NYOTA_EPERM;
     }
 
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
     uint64_t inode_num = 0;
-    if (nyotafs_resolve_path(&root_filesystem, path, &inode_num) != 0) {
+    if (nyotafs_resolve_path(&root_filesystem, use_path, &inode_num) != 0) {
         return NYOTA_ENOENT;
     }
 
@@ -634,5 +756,54 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
     if (nyotafs_write_inode(&root_filesystem, inode_num, &inode) != 0) {
         return NYOTA_EIO;
     }
+    return NYOTA_OK;
+}
+
+int vfs_chdir(const char *path) {
+    if (!path) return NYOTA_EINVAL;
+    process_t *curr = process_get_current();
+    if (!curr) return NYOTA_EBADF;
+
+    char resolved[128];
+    int err = vfs_normalize_path(path, resolved, sizeof(resolved));
+    if (err != NYOTA_OK) return err;
+
+    if (!root_mounted) return NYOTA_ENODEV;
+    uint64_t inode_num = 0;
+    if (nyotafs_resolve_path(&root_filesystem, resolved, &inode_num) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    nyota_inode_t inode;
+    if (nyotafs_read_inode(&root_filesystem, inode_num, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+
+    if ((inode.mode & NYOTA_MODE_TYPE_MASK) != NYOTA_MODE_DIR) {
+        return NYOTA_ENOTDIR;
+    }
+
+    size_t rlen = strlen(resolved);
+    if (rlen >= sizeof(curr->cwd)) rlen = sizeof(curr->cwd) - 1;
+    memcpy(curr->cwd, resolved, rlen);
+    curr->cwd[rlen] = '\0';
+    return NYOTA_OK;
+}
+
+int vfs_getcwd(char *buf, size_t size) {
+    if (!buf || size == 0) return NYOTA_EINVAL;
+    process_t *curr = process_get_current();
+    if (!curr) return NYOTA_EBADF;
+
+    const char *cwd = (curr->cwd[0] != '\0') ? curr->cwd : "/";
+    size_t len = strlen(cwd);
+    if (len + 1 > size) return NYOTA_ERANGE;
+
+    memcpy(buf, cwd, len + 1);
+    return NYOTA_OK;
+}
+
+int vfs_sync(void) {
+    /* NyotaFS writes blocks synchronously to storage device */
     return NYOTA_OK;
 }

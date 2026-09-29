@@ -20,6 +20,14 @@
 #include "security/security.h"
 #include "ipc/pipe.h"
 #include "ipc/shm.h"
+#include "time/clock.h"
+#include "time/rtc.h"
+#include "drivers/tty.h"
+#include "pmm.h"
+#include "io.h"
+#include "timer.h"
+
+void ___chkstk_ms(void) {}
 
 /* ── Integer Overflow & Validation Helpers ───────────────────────────────── */
 
@@ -346,16 +354,16 @@ static int64_t sys_handle_socket(int domain, int type, int protocol) {
 }
 
 static int64_t sys_handle_bind(int fd, uint64_t addr_uptr, size_t addrlen) {
-    (void)addrlen;
     file_t *f = vfs_get_file(fd);
     if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
 
-    struct sockaddr_in kaddr;
-    if (copy_from_user(&kaddr, (const void *)addr_uptr, sizeof(kaddr)) < 0) {
+    uint8_t kaddr_buf[sizeof(struct sockaddr_un)];
+    size_t copy_len = (addrlen > sizeof(kaddr_buf) || addrlen == 0) ? sizeof(kaddr_buf) : addrlen;
+    if (copy_from_user(kaddr_buf, (const void *)addr_uptr, copy_len) < 0) {
         return SYS_ERR_EFAULT;
     }
 
-    return socket_bind((socket_t *)f->filesystem_data, &kaddr);
+    return socket_bind((socket_t *)f->filesystem_data, (const struct sockaddr_in *)kaddr_buf);
 }
 
 static int64_t sys_handle_listen(int fd, int backlog) {
@@ -396,16 +404,16 @@ static int64_t sys_handle_accept(int fd, uint64_t addr_uptr, uint64_t addrlen_up
 }
 
 static int64_t sys_handle_connect(int fd, uint64_t addr_uptr, size_t addrlen) {
-    (void)addrlen;
     file_t *f = vfs_get_file(fd);
     if (!f || f->type != FILE_TYPE_SOCKET || !f->filesystem_data) return SYS_ERR_EBADF;
 
-    struct sockaddr_in kaddr;
-    if (copy_from_user(&kaddr, (const void *)addr_uptr, sizeof(kaddr)) < 0) {
+    uint8_t kaddr_buf[sizeof(struct sockaddr_un)];
+    size_t copy_len = (addrlen > sizeof(kaddr_buf) || addrlen == 0) ? sizeof(kaddr_buf) : addrlen;
+    if (copy_from_user(kaddr_buf, (const void *)addr_uptr, copy_len) < 0) {
         return SYS_ERR_EFAULT;
     }
 
-    int ret = socket_connect((socket_t *)f->filesystem_data, &kaddr);
+    int ret = socket_connect((socket_t *)f->filesystem_data, (const struct sockaddr_in *)kaddr_buf);
     return (ret == 0) ? 0 : SYS_ERR_ECONNREFUSED;
 }
 
@@ -638,6 +646,207 @@ static int64_t sys_handle_getprocs(uint64_t uptr, size_t max_count) {
     return count;
 }
 
+static int64_t sys_handle_time(uint64_t tloc_uptr) {
+    uint64_t sec = clock_get_epoch_seconds();
+    if (tloc_uptr != 0) {
+        if (!user_validate_pointer((void *)tloc_uptr, sizeof(uint64_t), true)) {
+            return SYS_ERR_EFAULT;
+        }
+        if (copy_to_user((void *)tloc_uptr, &sec, sizeof(sec)) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+    }
+    return (int64_t)sec;
+}
+
+static int64_t sys_handle_clock_gettime(int clk_id, uint64_t tp_uptr) {
+    if (!user_validate_pointer((void *)tp_uptr, sizeof(struct timespec), true)) {
+        return SYS_ERR_EFAULT;
+    }
+    struct timespec ts;
+    int res = clock_gettime(clk_id, &ts);
+    if (res != 0) return SYS_ERR_EINVAL;
+    if (copy_to_user((void *)tp_uptr, &ts, sizeof(ts)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return 0;
+}
+
+static int64_t sys_handle_nanosleep(uint64_t req_uptr, uint64_t rem_uptr) {
+    if (!user_validate_pointer((void *)req_uptr, sizeof(struct timespec), false)) {
+        return SYS_ERR_EFAULT;
+    }
+    struct timespec req;
+    if (copy_from_user(&req, (void *)req_uptr, sizeof(req)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    uint64_t ms = (uint64_t)req.tv_sec * 1000 + (uint64_t)(req.tv_nsec / 1000000);
+    if (ms == 0 && req.tv_nsec > 0) ms = 1;
+
+    timer_sleep(ms);
+
+    if (rem_uptr != 0) {
+        if (user_validate_pointer((void *)rem_uptr, sizeof(struct timespec), true)) {
+            struct timespec rem = {0, 0};
+            copy_to_user((void *)rem_uptr, &rem, sizeof(rem));
+        }
+    }
+    return 0;
+}
+
+static int64_t sys_handle_chdir(uint64_t path_uptr) {
+    char kpath[256];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return vfs_chdir(kpath);
+}
+
+static int64_t sys_handle_getcwd(uint64_t buf_uptr, size_t size) {
+    if (!user_validate_pointer((void *)buf_uptr, size, true)) {
+        return SYS_ERR_EFAULT;
+    }
+    char kbuf[256];
+    int res = vfs_getcwd(kbuf, sizeof(kbuf));
+    if (res != 0) return res;
+    size_t len = strlen(kbuf) + 1;
+    if (len > size) return SYS_ERR_ERANGE;
+    if (copy_to_user((void *)buf_uptr, kbuf, len) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return (int64_t)len;
+}
+
+static int64_t sys_handle_sync(void) {
+    return vfs_sync();
+}
+
+static int64_t sys_handle_reboot(int cmd) {
+    process_t *curr = process_get_current();
+    if (!curr || curr->uid != 0) {
+        return SYS_ERR_EPERM;
+    }
+
+    klog_write(KLOG_LEVEL_INFO, "[KERNEL] System shutdown/reboot requested");
+    vfs_sync();
+
+    if (cmd == REBOOT_CMD_REBOOT) {
+        uint8_t good = 0x02;
+        while (good & 0x02) {
+            good = inb(0x64);
+        }
+        outb(0x64, 0xFE);
+        outb(0xCF9, 0x06);
+    } else {
+        /* Poweroff */
+        outw(0x604, 0x2000);
+        outw(0xB004, 0x2000);
+        outw(0x4004, 0x3400);
+    }
+
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
+    return 0;
+}
+
+static int64_t sys_handle_klog(int action, uint64_t buf_uptr, size_t len) {
+    if (action == 1) {
+        char kmsg[128];
+        if (copy_string_from_user(kmsg, (const char *)buf_uptr, sizeof(kmsg)) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+        klog_write(KLOG_LEVEL_INFO, kmsg);
+        return 0;
+    } else if (action == 2) {
+        if (!user_validate_pointer((void *)buf_uptr, len, true)) {
+            return SYS_ERR_EFAULT;
+        }
+        char kbuf[1024];
+        if (len > sizeof(kbuf)) len = sizeof(kbuf);
+        int bytes = klog_read_entries(kbuf, len, true);
+        if (bytes > 0) {
+            if (copy_to_user((void *)buf_uptr, kbuf, bytes) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+        }
+        return bytes;
+    }
+    return SYS_ERR_EINVAL;
+}
+
+static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
+    if (!user_validate_pointer((void *)info_uptr, sizeof(sysinfo_data_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+    sysinfo_data_t info;
+    memset(&info, 0, sizeof(info));
+    info.uptime_sec = timer_uptime_sec();
+    info.total_ram = pmm_usable_memory();
+    info.used_ram = pmm_used_memory();
+    info.free_ram = pmm_free_memory();
+    info.process_count = (uint32_t)process_count();
+    memcpy(info.kernel_ver, "0.9.0", 5);
+    memcpy(info.machine, "x86_64", 6);
+
+    if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return 0;
+}
+
+static int64_t sys_handle_tty_ctrl(int cmd, uint64_t arg) {
+    tty_t *tty = tty_get_current();
+    if (!tty) return SYS_ERR_ENODEV;
+
+    if (cmd == TTY_CTRL_GET_PGRP) {
+        return (int64_t)tty_get_foreground_pgrp(tty);
+    } else if (cmd == TTY_CTRL_SET_PGRP) {
+        tty_set_foreground_pgrp(tty, (uint32_t)arg);
+        return 0;
+    }
+    return SYS_ERR_EINVAL;
+}
+
+static int64_t sys_handle_execve(uint64_t path_uptr, uint64_t argv_uptr, uint64_t envp_uptr) {
+    char kpath[256];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    char *kargv[32] = {0};
+    char arg_bufs[32][64];
+    if (argv_uptr != 0) {
+        const char **uargv = (const char **)argv_uptr;
+        for (int i = 0; i < 31; i++) {
+            if (!user_validate_pointer(&uargv[i], sizeof(char *), false)) break;
+            const char *uarg = uargv[i];
+            if (!uarg) break;
+            if (copy_string_from_user(arg_bufs[i], uarg, sizeof(arg_bufs[i])) < 0) break;
+            kargv[i] = arg_bufs[i];
+        }
+    }
+
+    char *kenvp[32] = {0};
+    char env_bufs[32][128];
+    if (envp_uptr != 0) {
+        const char **uenvp = (const char **)envp_uptr;
+        for (int i = 0; i < 31; i++) {
+            if (!user_validate_pointer(&uenvp[i], sizeof(char *), false)) break;
+            const char *uenv = uenvp[i];
+            if (!uenv) break;
+            if (copy_string_from_user(env_bufs[i], uenv, sizeof(env_bufs[i])) < 0) break;
+            kenvp[i] = env_bufs[i];
+        }
+    }
+
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    int ret = process_execve(curr, kpath, kargv, kenvp);
+    return (ret == NYOTA_OK) ? 0 : SYS_ERR_ENOENT;
+}
+
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -686,6 +895,17 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_SPAWN2:    return sys_handle_spawn2(a1, a2, (int)a3, (int)a4);
         case SYS_SECINFO:   return sys_handle_secinfo(a1);
         case SYS_GETPROCS:  return sys_handle_getprocs(a1, (size_t)a2);
+        case SYS_TIME:          return sys_handle_time(a1);
+        case SYS_CLOCK_GETTIME: return sys_handle_clock_gettime((int)a1, a2);
+        case SYS_NANOSLEEP:     return sys_handle_nanosleep(a1, a2);
+        case SYS_CHDIR:         return sys_handle_chdir(a1);
+        case SYS_GETCWD:        return sys_handle_getcwd(a1, (size_t)a2);
+        case SYS_SYNC:          return sys_handle_sync();
+        case SYS_REBOOT:        return sys_handle_reboot((int)a1);
+        case SYS_KLOG:          return sys_handle_klog((int)a1, a2, (size_t)a3);
+        case SYS_SYSINFO:       return sys_handle_sysinfo(a1);
+        case SYS_TTY_CTRL:      return sys_handle_tty_ctrl((int)a1, a2);
+        case SYS_EXECVE:        return sys_handle_execve(a1, a2, a3);
         default:            return SYS_ERR_ENOSYS;
     }
 }
