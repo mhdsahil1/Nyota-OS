@@ -31,6 +31,9 @@
 #include "elf/elf.h"
 #include "drivers/pci.h"
 #include "net/net.h"
+#include "security/security.h"
+#include "ipc/pipe.h"
+#include "ipc/shm.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -254,12 +257,42 @@ void kernel_main(void) {
     /* 15. PCI & Network Subsystems */
     pci_init();
     net_init();
+
+    /* 16. Security & IPC Subsystems (Phase 8) */
+    security_init();
+    pipe_init();
+    shm_init();
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("IPC");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Signals");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Permissions");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Capabilities");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Resource Limits");
     vga_println("");
 
-    /* 16. Launch First Userspace Process (/init) */
+    /* 17. Launch First Userspace Process (/init) */
     process_t *init_proc = process_spawn_init();
 
-    /* 17. Start Scheduler & Enter Multitasking */
+    /* 18. Start Scheduler & Enter Multitasking */
     if (init_proc) {
         process_run(init_proc);
         /* Idle kernel thread while userspace is active */

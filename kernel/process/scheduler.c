@@ -186,6 +186,28 @@ void scheduler_sleep(uint64_t ms) {
     reschedule_requested = true;
 }
 
+void scheduler_wake(process_t *proc) {
+    if (!proc) return;
+
+    /* 1. Unlink from sleep queue if present */
+    process_t **curr = &sleep_queue;
+    while (*curr) {
+        if (*curr == proc) {
+            *curr = proc->next;
+            proc->next = NULL;
+            proc->prev = NULL;
+            break;
+        }
+        curr = &((*curr)->next);
+    }
+
+    /* 2. Transition from SLEEPING to READY and enroll into ready queue */
+    if (proc->state == PROCESS_SLEEPING) {
+        proc->state = PROCESS_READY;
+        scheduler_add(proc);
+    }
+}
+
 /* ── Timer Tick Hook ──────────────────────────────────────────────────────── */
 
 void scheduler_on_timer_tick(void) {

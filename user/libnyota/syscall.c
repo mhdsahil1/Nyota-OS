@@ -149,12 +149,84 @@ int spawn(const char *path, char *const argv[]) {
 
 int waitpid(int pid, int *status) {
     while (1) {
-        int64_t ret = syscall2(15, (uint64_t)pid, (uint64_t)status);
+        int64_t ret = syscall3(15, (uint64_t)pid, (uint64_t)status, 0);
         if (ret != 0) {
             return (int)ret;
         }
-        sleep(50);
+        sleep(20);
     }
+}
+
+int spawn2(const char *path, char *const argv[], int in_fd, int out_fd) {
+    return (int)syscall4(41, (uint64_t)path, (uint64_t)argv, (uint64_t)in_fd, (uint64_t)out_fd);
+}
+
+int pipe(int fds[2]) {
+    return (int)syscall1(26, (uint64_t)fds);
+}
+
+int dup2(int oldfd, int newfd) {
+    return (int)syscall2(27, (uint64_t)oldfd, (uint64_t)newfd);
+}
+
+int kill(int pid, int sig) {
+    return (int)syscall2(28, (uint64_t)pid, (uint64_t)sig);
+}
+
+int signal(int sig, void (*handler)(int)) {
+    return (int)syscall2(29, (uint64_t)sig, (uint64_t)handler);
+}
+
+uint32_t getuid(void) {
+    return (uint32_t)syscall0(30);
+}
+
+int setuid(uint32_t uid) {
+    return (int)syscall1(31, (uint64_t)uid);
+}
+
+uint32_t getgid(void) {
+    return (uint32_t)syscall0(32);
+}
+
+int setgid(uint32_t gid) {
+    return (int)syscall1(33, (uint64_t)gid);
+}
+
+int chmod(const char *path, uint32_t mode) {
+    return (int)syscall2(34, (uint64_t)path, (uint64_t)mode);
+}
+
+int chown(const char *path, uint32_t uid, uint32_t gid) {
+    return (int)syscall3(35, (uint64_t)path, (uint64_t)uid, (uint64_t)gid);
+}
+
+int shm_get(uint32_t key, size_t size, int flags) {
+    return (int)syscall3(36, (uint64_t)key, (uint64_t)size, (uint64_t)flags);
+}
+
+void *shm_at(int shmid, const void *addr, int flags) {
+    return (void *)syscall3(37, (uint64_t)shmid, (uint64_t)addr, (uint64_t)flags);
+}
+
+int shm_dt(const void *addr) {
+    return (int)syscall1(38, (uint64_t)addr);
+}
+
+int shm_ctl(int shmid, int cmd, void *buf) {
+    return (int)syscall3(39, (uint64_t)shmid, (uint64_t)cmd, (uint64_t)buf);
+}
+
+int64_t getrandom(void *buf, size_t len, unsigned int flags) {
+    return syscall3(40, (uint64_t)buf, (uint64_t)len, (uint64_t)flags);
+}
+
+int secinfo(secinfo_t *info) {
+    return (int)syscall1(42, (uint64_t)info);
+}
+
+int getprocs(proc_info_t *buf, size_t max_count) {
+    return (int)syscall2(43, (uint64_t)buf, max_count);
 }
 
 int socket(int domain, int type, int protocol) {

@@ -9,6 +9,8 @@
 #include "vga.h"
 #include "serial.h"
 #include "process.h"
+#include "signal.h"
+#include "security/security.h"
 
 static const char * const exception_names[32] = {
     "Divide Error (#DE)",
@@ -132,7 +134,39 @@ static void page_fault_handler(interrupt_frame_t *frame) {
     bool fetch   = (err & 0x10) != 0;
     bool pk      = (err & 0x20) != 0;
 
-    /* Write to COM1 serial for debugging/headless test */
+    /* If the fault occurred in Ring 3 User Space, terminate offending process without crashing kernel */
+    if (user || (frame->cs & 3) == 3) {
+        process_t *curr = process_get_current();
+        uint32_t pid = curr ? curr->pid : 0;
+
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        vga_print("\n[SEC] PID "); vga_print_dec(pid); vga_println("");
+        vga_println("      exception: page fault");
+        vga_print("      address: "); vga_print_hex(cr2); vga_println("");
+        vga_println("      signal: SIGSEGV\n");
+        vga_print("[PROC] PID "); vga_print_dec(pid); vga_println(" terminated");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+
+        serial_write("\n[SEC] PID "); serial_write_dec(pid); serial_write("\n");
+        serial_write("      exception: page fault\n");
+        serial_write("      address: "); serial_write_hex(cr2); serial_write("\n");
+        serial_write("      signal: SIGSEGV\n\n");
+        serial_write("[PROC] PID "); serial_write_dec(pid); serial_write(" terminated\n");
+
+        security_log("Page fault exception in user process", pid);
+
+        if (curr && curr->signal_handlers[SIGSEGV] != 0 && curr->signal_handlers[SIGSEGV] != 1) {
+            signal_send(curr, SIGSEGV);
+            signal_check_and_deliver(frame);
+            return;
+        }
+
+        interrupts_enable();
+        process_exit(128 + SIGSEGV);
+        return;
+    }
+
+    /* Kernel Page Fault Diagnostic Dump */
     serial_write("\n========================================\n");
     serial_write("           NYOTA PAGE FAULT             \n");
     serial_write("========================================\n");
@@ -141,7 +175,7 @@ static void page_fault_handler(interrupt_frame_t *frame) {
     serial_write("RIP        : "); serial_write_hex(frame->rip); serial_write("\n");
     serial_write("Access     : "); serial_write(fetch ? "EXECUTE\n" : (write ? "WRITE\n" : "READ\n"));
     serial_write("Cause      : "); serial_write(rsvd ? "RESERVED BIT\n" : (pk ? "PROTECTION KEY\n" : (present ? "PROTECTION VIOLATION\n" : "NOT PRESENT\n")));
-    serial_write("Mode       : "); serial_write(user ? "USER\n" : "KERNEL\n");
+    serial_write("Mode       : KERNEL\n");
     serial_write("========================================\n");
     serial_write("RAX: "); serial_write_hex(frame->rax);
     serial_write(" RBX: "); serial_write_hex(frame->rbx);
@@ -151,33 +185,6 @@ static void page_fault_handler(interrupt_frame_t *frame) {
     serial_write(" RDI: "); serial_write_hex(frame->rdi);
     serial_write(" RBP: "); serial_write_hex(frame->rbp);
     serial_write(" RSP: "); serial_write_hex(frame->rsp); serial_write("\n");
-    serial_write("Caller return addr at RSP+0x418: ");
-    serial_write_hex(*(uint64_t *)(frame->rsp + 0x418));
-    serial_write("\n");
-    serial_write("Caller stack frame:\n");
-    uint64_t *csp = (uint64_t *)(frame->rsp + 0x418);
-    for (int i = 0; i < 8; i++) {
-        serial_write("  ret+"); serial_write_dec(i * 8);
-        serial_write(": "); serial_write_hex(csp[i]); serial_write("\n");
-    }
-
-
-
-    /* If the fault occurred in Ring 3 User Space, terminate offending process without crashing kernel */
-    if (user) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        vga_println("\n[SECURITY] Ring 3 User Process Page Fault (SIGSEGV)!");
-        vga_print("Fault Addr : "); vga_print_hex(cr2); vga_println("");
-        vga_print("RIP        : "); vga_print_hex(frame->rip); vga_println("");
-        vga_print("Access     : "); vga_println(fetch ? "EXECUTE" : (write ? "WRITE" : "READ"));
-        vga_print("Cause      : "); vga_println(present ? "PROTECTION VIOLATION" : "PAGE NOT PRESENT");
-        vga_println("[SECURITY] Offending user process terminated.");
-        vga_set_color(VGA_WHITE, VGA_BLACK);
-
-        interrupts_enable();
-        process_exit(-11);
-        return;
-    }
 
     /* Format on VGA */
     vga_set_color(VGA_WHITE, VGA_RED);
@@ -252,6 +259,42 @@ void exception_handler(interrupt_frame_t *frame) {
     /* Vector 14: Page Fault (#PF) — specialized diagnostic display */
     if (frame->vector == 14) {
         page_fault_handler(frame);
+        return;
+    }
+
+    /* If exception occurred in Ring 3 User Space, convert to signal and terminate cleanly */
+    if ((frame->cs & 3) == 3) {
+        process_t *curr = process_get_current();
+        uint32_t pid = curr ? curr->pid : 0;
+        int sig = SIGSEGV;
+        const char *exc_name = "general protection";
+
+        if (frame->vector == 0) {
+            sig = SIGFPE;
+            exc_name = "divide error";
+        } else if (frame->vector == 6) {
+            sig = SIGILL;
+            exc_name = "invalid opcode";
+        }
+
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        vga_print("\n[SEC] PID "); vga_print_dec(pid); vga_println("");
+        vga_print("      exception: "); vga_println(exc_name);
+        vga_print("      signal: "); vga_println(sig == SIGFPE ? "SIGFPE" : (sig == SIGILL ? "SIGILL" : "SIGSEGV"));
+        vga_println("");
+        vga_print("[PROC] PID "); vga_print_dec(pid); vga_println(" terminated");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+
+        security_log("Exception in user process", pid);
+
+        if (curr && curr->signal_handlers[sig] != 0 && curr->signal_handlers[sig] != 1) {
+            signal_send(curr, sig);
+            signal_check_and_deliver(frame);
+            return;
+        }
+
+        interrupts_enable();
+        process_exit(128 + sig);
         return;
     }
 

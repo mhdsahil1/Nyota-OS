@@ -7,8 +7,12 @@
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        puts("Usage: cat <filename>");
-        return 1;
+        char buffer[256];
+        int64_t bytes = 0;
+        while ((bytes = read(STDIN_FILENO, buffer, sizeof(buffer))) > 0) {
+            write(STDOUT_FILENO, buffer, (size_t)bytes);
+        }
+        return 0;
     }
 
     for (int i = 1; i < argc; i++) {

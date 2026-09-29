@@ -55,7 +55,8 @@ typedef enum {
     FILE_TYPE_DIR,
     FILE_TYPE_DEV_CONSOLE,
     FILE_TYPE_DEV_NULL,
-    FILE_TYPE_SOCKET
+    FILE_TYPE_SOCKET,
+    FILE_TYPE_PIPE
 } file_type_t;
 
 /* File Object (Kernel open file description) */
@@ -95,12 +96,15 @@ nyota_fs_t *vfs_get_root_fs(void);
 int vfs_init_process_fds(file_t **fds);
 int vfs_alloc_fd(file_t **fds, file_t *f);
 int vfs_close_process_fds(file_t **fds);
+int vfs_close_file(file_t *f);
+file_t *vfs_alloc_file(void);
 file_t *vfs_create_socket_file(void *sock_ptr);
 file_t *vfs_get_file(int fd);
 
 /* File Operations */
 int vfs_open(const char *path, int flags, int mode);
 int vfs_close(int fd);
+int vfs_dup2(int oldfd, int newfd);
 int64_t vfs_read(int fd, void *buf, size_t count);
 int64_t vfs_write(int fd, const void *buf, size_t count);
 int64_t vfs_seek(int fd, int64_t offset, int whence);
@@ -108,5 +112,7 @@ int vfs_stat(const char *path, vfs_stat_t *st);
 int vfs_fstat(int fd, vfs_stat_t *st);
 int vfs_readdir(int fd, vfs_dirent_t *dirp);
 int vfs_mkdir(const char *path, int mode);
+int vfs_chmod(const char *path, uint32_t mode);
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid);
 
 #endif /* NYOTA_FS_VFS_H */

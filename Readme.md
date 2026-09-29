@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-7%3A%20Networking%2C%20TCP%2FIP%20%26%20Sockets-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.7.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-8%3A%20IPC%2C%20Security%20Hardening%20%26%20Process%20Isolation-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v0.8.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="#-phase-8-overview-ipc-security-hardening--process-isolation">Phase 8 Overview</a>
+  ·
   <a href="#-phase-7-overview-networking-tcpip--sockets">Phase 7 Overview</a>
   ·
   <a href="#-phase-6-overview-filesystem-elf-loader--real-userland">Phase 6 Overview</a>
@@ -61,6 +63,143 @@
 > Every subsystem added to Nyota should have a clear interface, a testable implementation, and a reason to exist.
 > The goal isn't to make Nyota look like an operating system.
 > **The goal is to make Nyota actually behave like one.**
+
+---
+
+# 🔒 Phase 8 Overview: IPC, Security Hardening & Process Isolation
+
+**Current Status:** **Phase 8 — IPC, Security Hardening & Process Isolation** (Completed)
+
+Phase 8 fortifies Nyota OS with a defense-in-depth security model, robust process isolation, safe inter-process communication, and resilient failure recovery. The kernel now assumes all user input, pointers, lengths, file descriptors, and IPC requests are untrusted. Malformed requests are rejected cleanly with `-EFAULT` / `-EINVAL`, user CPU faults (#DE, #UD, #GP, #PF) are converted into POSIX signals without kernel panics, and isolated processes communicate safely via anonymous pipes and page-aligned shared memory:
+
+```text
+                                USERLAND (Ring 3)
+         ┌──────────────────────────────┼──────────────────────────────┐
+         ▼                              ▼                              ▼
+  Process Control                      IPC                          Signals
+   (waitpid, kill)             (Pipes, Shared Mem)             (sigaction, masks)
+         │                              │                              │
+         └──────────────────────────────┼──────────────────────────────┘
+                                        ▼
+                               SYSCALL BOUNDARY
+                          (Vector 0x80 Dispatcher)
+                                        │
+                         ┌──────────────┴──────────────┐
+                         ▼                             ▼
+                 Validation Engine             Security Checks
+              (Pointer / Buffer Check)     (UID/GID & Capabilities)
+              (Integer Overflow Guard)     (Resource Limits Check)
+                         │                             │
+                         └──────────────┬──────────────┘
+                                        ▼
+                               KERNEL SUBSYSTEMS
+         ┌──────────────────────────────┼──────────────────────────────┐
+         ▼                              ▼                              ▼
+  Memory Isolation                  Scheduler                         VFS
+  (Stack Guard Pages)         (Parent/Child Trees)              (Pipes & Nodes)
+  (Shared Memory Maps)        (Zombies & Orphans)               (Chmod & Chown)
+         │                              │                              │
+         └──────────────────────────────┼──────────────────────────────┘
+                                        ▼
+                               Hardware (Ring 0)
+```
+
+---
+
+### Key Subsystems Delivered in Phase 8:
+
+1. **Process Hierarchy & Safe Lifecycle Management (`kernel/process/process.c`)**:
+   - **Parent/Child Relationships**: Every PCB (`process_t`) tracks its `parent_pid`, pointer to `parent`, and a linked list of `children`. Provides `process_add_child()` and `process_remove_child()`.
+   - **Non-Spinning Process Waiting (`waitpid`)**: `process_waitpid()` integrates with scheduler wait queues. If the target child is still running, the parent transitions to `PROCESS_SLEEPING` and yields CPU time without spinning.
+   - **Zombie Process Lifecycle**: When a child process terminates, it transitions to `PROCESS_TERMINATED` (zombie), retaining its PID, exit status, and termination signal. Upon `waitpid()`, the parent reaps the exit status and frees the remaining PCB resources.
+   - **Automatic Orphan Adoption**: When a parent process terminates while children are alive, all orphaned children are automatically reparented to PID 1 (`/init`), preventing un-reapable zombies.
+   - **Clean Process Exit (`process_exit`)**: Systematically closes all open file descriptors and sockets, releases active shared memory attachments, unmaps user memory regions, sends `SIGCHLD` to the parent, wakes waiting parents, and logs termination diagnostics.
+
+2. **POSIX Signal Subsystem & Return-to-User Delivery Gate (`kernel/process/signal.c`)**:
+   - **Signal Representation**: 64-bit signal bitmasks (`signal_set_t`) for `pending` and `blocked` signals.
+   - **Core Signals**: `SIGTERM` (15), `SIGKILL` (9), `SIGSTOP` (19), `SIGCONT` (18), `SIGCHLD` (17), `SIGSEGV` (11), `SIGILL` (4), `SIGFPE` (8), `SIGPIPE` (13).
+   - **Actions & Handlers**: Supports `SIG_DFL`, `SIG_IGN`, and custom user handlers registered via `sys_sigaction`. Enforces POSIX rules: `SIGKILL` and `SIGSTOP` cannot be caught or ignored.
+   - **Safe Delivery Gate**: Signal checks occur exclusively at safe execution boundaries—right before returning to Ring 3 in `syscall_dispatch`. If a pending, unmasked signal is present, default actions (termination, ignore, stop, continue) or user handler frames are executed safely.
+
+3. **CPU Exception-to-Signal Dispatch & Crash Containment (`kernel/arch/x86_64/exceptions.c`)**:
+   - User-mode processor exceptions are caught by the kernel IDT stubs and converted directly into signals:
+     - Divide by Zero (`#DE`, Vector 0) -> `SIGFPE`
+     - Invalid Opcode (`#UD`, Vector 6) -> `SIGILL`
+     - General Protection Fault (`#GP`, Vector 13) -> `SIGSEGV`
+     - Page Fault (`#PF`, Vector 14) -> `SIGSEGV`
+   - **Crash Containment**: A crashing Ring 3 process (e.g., dereferencing `0x10` in `/bin/crash` or executing an illegal instruction) is cleanly terminated with a security diagnostic log (`[SEC] PID X exception: page fault, signal: SIGSEGV`). The kernel, interactive shell, and background services remain 100% stable and operational.
+
+4. **Anonymous Pipes & Stream Redirection (`kernel/ipc/pipe.c`, `kernel/fs/vfs.c`)**:
+   - **Circular Buffer Architecture**: Bounded 4096-byte circular FIFO buffer (`pipe_t`) protected by separate read and write positions, byte counts, and reference counters.
+   - **Blocking I/O**: Reads on empty pipes sleep until data is written; writes to full pipes sleep until space is drained.
+   - **EOF & Broken Pipe Semantics**: When all writers close, readers receive `0` (EOF). When all readers close, writers receive `-EPIPE` and a `SIGPIPE` signal.
+   - **VFS Integration**: Pipes are exposed as standard file descriptors (`FILE_TYPE_PIPE`). Supports `sys_pipe` and `sys_dup2`.
+   - **Shell Pipelines**: Enables pipeline streaming in `/bin/sh` (`ls | cat`, `cmd1 | cmd2`) and standard stream redirection (`>`, `<`).
+
+5. **Controlled Shared Memory IPC (`kernel/ipc/shm.c`)**:
+   - **System V-Style Shared Memory**: Implements `sys_shmget`, `sys_shmat`, `sys_shmdt`, and `sys_shmctl`.
+   - **Page-Aligned Virtual Aperture**: Maps shared segments starting at `0x0000008000180000ULL`, dynamically mapping physical frames into calling process page tables with user read/write attributes.
+   - **Security & Permissions**: Shared segments enforce owner UID/GID and permission mode flags (`0666`, `0600`). Non-owners without permission receive `-EACCES`.
+   - **Reference Counting & Automatic Cleanup**: Segments track active attachment counts. Upon process exit, all attached segments are automatically detached and unmapped.
+
+6. **User Identity, Permissions & Capabilities (`kernel/security/capability.c`)**:
+   - **UID/GID Tracking**: Every process possesses effective UID and GID (PID 1 / root: UID 0; normal user: UID 1000).
+   - **Capability Model**: Granular 64-bit capability bitmask:
+     - `CAP_NET_ADMIN` (1 << 0): Network interface configuration and routing.
+     - `CAP_NET_RAW` (1 << 1): Raw ICMP and packet socket creation.
+     - `CAP_SYS_ADMIN` (1 << 2): System configuration and hardware control.
+     - `CAP_IPC_OWNER` (1 << 3): Override IPC ownership and permissions.
+     - `CAP_KILL` (1 << 4): Signal arbitrary processes regardless of UID.
+   - **Filesystem Permissions**: VFS checks read, write, and execute permissions on inodes (`vfs_chmod`, `vfs_chown`). System directories (`/bin`, `/etc`, `/kernel`) are protected against unauthorized modification.
+
+7. **Per-Process Resource Limits (`include/process.h`)**:
+   - Each process enforces configurable resource limits (`limits`):
+     - `max_memory`: Upper bound on allocated address space.
+     - `max_open_files`: Enforced maximum open file descriptors (default: 16).
+     - `max_processes`: Limit on child processes.
+     - `max_sockets`: Limit on open network sockets.
+   - Limit violations return clean errors (`-EMFILE`, `-ENOMEM`) rather than exhausting kernel resources.
+
+8. **Kernel Hardening & Memory Isolation**:
+   - **Centralized Pointer Validation**: `validate_user_pointer()` and `validate_user_buffer()` guarantee that all userspace-supplied buffers reside strictly below `USER_SPACE_END` (`0x0000800000000000ULL`) and do not wrap around address boundaries.
+   - **Integer Overflow Protection**: Checked arithmetic helpers (`size_add_overflow`, `size_mul_overflow`) prevent buffer length and offset overflow exploits.
+   - **Stack Guard Pages**: An unmapped 4 KiB guard page is placed immediately below the user stack base (`0x800000F000`). Stack overflow attempts trigger an immediate, controlled page fault (`SIGSEGV`) rather than corrupting adjacent mappings.
+   - **Hardware-Seeded PRNG**: SplitMix64 pseudorandom generator (`kernel_random()`) seeded via CPU `rdtsc`, exposed to userspace via `sys_getrandom` (Vector 43).
+   - **ASLR Foundation**: Randomized user stack base and shared memory attachment offsets.
+   - **Security Audit Logging**: Kernel security event mechanism (`security_log()`) generating structured audit records for invalid syscalls, privilege violations, and Ring 3 exceptions.
+
+9. **New System Calls in Phase 8 (Vectors 26..43)**:
+
+| Vector | Syscall Name | Description |
+| :---: | :--- | :--- |
+| `26` | `SYS_WAITPID` | Wait for child process state change or termination |
+| `27` | `SYS_KILL` | Send a signal to a process |
+| `28` | `SYS_SIGACTION` | Examine and change a signal action |
+| `29` | `SYS_SIGPROCMASK` | Examine and change blocked signals |
+| `30` | `SYS_PIPE` | Create an anonymous unidirectional data channel |
+| `31` | `SYS_DUP2` | Duplicate an open file descriptor onto another |
+| `32` | `SYS_SHMGET` | Allocates a System V shared memory segment |
+| `33` | `SYS_SHMAT` | Attach shared memory segment into process address space |
+| `34` | `SYS_SHMDT` | Detach shared memory segment from process address space |
+| `35` | `SYS_SHMCTL` | Control shared memory segment (stat, remove) |
+| `36` | `SYS_GETUID` | Get real user identity |
+| `37` | `SYS_SETUID` | Set real user identity (privileged) |
+| `38` | `SYS_GETGID` | Get real group identity |
+| `39` | `SYS_SETGID` | Set real group identity (privileged) |
+| `40` | `SYS_CHMOD` | Change file permission mode bits |
+| `41` | `SYS_CHOWN` | Change file owner and group |
+| `42` | `SYS_SECINFO` | Query kernel security feature status & diagnostic counters |
+| `43` | `SYS_GETRANDOM` | Obtain cryptographic/system entropy bytes |
+
+10. **Ring 3 Security & Diagnostic Suite**:
+    - **`/bin/secinfo`**: Displays kernel security posture (isolation, guard pages, ASLR, capabilities, active IPC objects).
+    - **`/bin/kill`**: User signal utility supporting `-TERM`, `-KILL`, `-STOP`, `-CONT`.
+    - **`/bin/ipctest`**: Automated validation of pipe communication, blocking I/O, shared memory, and permission enforcement.
+    - **`/bin/memtest`**: Validates user vs. kernel memory isolation, foreign address space protection, and unmapped access faulting.
+    - **`/bin/crash`**: Intentionally triggers user-space `#PF` (null dereference) to demonstrate clean exception-to-signal crash containment.
+    - **`/bin/stressproc`**: Spawns multiple processes communicating through pipes to stress lifecycle and resource management.
+    - **`/bin/ps`**: Extended to display `PPID`, `UID`, process states, and an interactive process tree (`ps tree`).
+    - **`/bin/sh`**: Enhanced with command pipelines (`|`), background job execution (`&`), and stream redirection (`>`, `<`).
 
 ---
 
@@ -680,10 +819,10 @@ nyota-os/
 │   │       ├── idt.c        # 256-entry 64-bit IDT initialization & trap/user gates
 │   │       ├── interrupts.asm # 256 ISR stubs, uniform stack frames, iretq
 │   │       ├── dispatcher.c # Centralized interrupt dispatcher & handler table
-│   │       ├── exceptions.c # CPU exception handlers (0..31) & page fault diagnostics
+│   │       ├── exceptions.c # CPU exception handlers (0..31) & Ring 3 signal dispatch
 │   │       ├── pic.c        # 8259 PIC initialization, IRQ remapping, EOI
-│   │       ├── paging.c     # 4-level paging (PML4, PDPT, PD, PT), map/unmap, VMM
-│   │       └── syscall.c    # Vector 0x80 syscall dispatcher (26 syscalls, vectors 0..25)
+│   │       ├── paging.c     # 4-level paging (PML4, PDPT, PD, PT), map/unmap, guard pages
+│   │       └── syscall.c    # Vector 0x80 syscall dispatcher (44 syscalls, vectors 0..43)
 │   │
 │   ├── cpu/
 │   │   ├── cpu.c            # CPUID hardware feature detection & vendor query
@@ -699,9 +838,19 @@ nyota-os/
 │   │   └── memtest.c        # Automated PMM, VMM, and heap stress validation suite
 │   │
 │   ├── process/
-│   │   ├── process.c        # Process control blocks (PCB), PID allocator, execution
+│   │   ├── process.c        # Process control blocks (PCB), parent/child, waitpid, zombies
 │   │   ├── scheduler.c      # Preemptive round-robin scheduler & time-slice preemption
+│   │   ├── signal.c         # POSIX signal delivery, registration, and exception mapping
 │   │   └── usertest.c       # Ring 3 security tests & privilege violation verification
+│   │
+│   ├── ipc/
+│   │   ├── pipe.c           # Anonymous pipe circular buffer, blocking I/O, EOF, SIGPIPE
+│   │   └── shm.c            # Controlled shared memory segments, permissions, refcounts
+│   │
+│   ├── security/
+│   │   ├── capability.c     # User identity, capability bitmasks, and privilege checks
+│   │   ├── random.c         # Hardware-seeded SplitMix64 PRNG and sys_getrandom
+│   │   └── security.c       # Kernel security posture querying and audit logging
 │   │
 │   ├── storage/
 │   │   ├── ata.c            # ATA PIO disk controller driver (LBA28 read/write)
@@ -709,7 +858,7 @@ nyota-os/
 │   │
 │   ├── fs/
 │   │   ├── nyotafs.c        # Native filesystem implementation (inodes, extents, dirs)
-│   │   └── vfs.c            # Virtual filesystem (open, read, write, close, sockets)
+│   │   └── vfs.c            # Virtual filesystem (open, read, write, close, pipes, sockets)
 │   │
 │   ├── elf/
 │   │   └── elf.c            # Freestanding 64-bit ELF executable parser & segment loader
@@ -753,8 +902,11 @@ nyota-os/
 │   ├── paging.h             # 4-level paging and address space management
 │   ├── heap.h               # Dynamic heap allocator API
 │   ├── memtest.h            # Memory diagnostic and stress testing
-│   ├── syscall.h            # Syscall numbers (0..25), ABI constants, pointer validation
-│   ├── process.h            # Process structure, states, lifecycle APIs
+│   ├── syscall.h            # Syscall numbers (0..43), ABI constants, pointer validation
+│   ├── process.h            # Process hierarchy, states, limits, lifecycle APIs
+│   ├── signal.h             # POSIX signal definitions, signal_set_t, sigaction
+│   ├── ipc/                 # Pipe circular buffer and shared memory headers
+│   ├── security/            # Capability bitmasks, security info, and PRNG headers
 │   ├── storage/             # Block device and ATA driver headers
 │   ├── fs/                  # NyotaFS and VFS layer headers
 │   ├── elf/                 # ELF64 header structures and loader prototypes
@@ -762,21 +914,27 @@ nyota-os/
 │   └── net/                 # Protocol headers (ethernet, arp, ipv4, icmp, udp, tcp, socket)
 │
 ├── user/
-│   ├── libnyota/            # Ring 3 C library (crt0, syscalls, sockets, stdio, string)
-│   ├── init/                # System init process (PID 1)
-│   ├── sh/                  # Interactive user command shell
+│   ├── libnyota/            # Ring 3 C library (crt0, syscalls, sockets, IPC, signals)
+│   ├── init/                # System init process (PID 1, orphan reaper)
+│   ├── sh/                  # Interactive user command shell (pipelines, backgrounding)
 │   ├── hello/               # Hello world user program
 │   ├── echo/                # Argument echoing utility
 │   ├── ls/                  # Directory listing utility
-│   ├── cat/                 # File concatenation and viewing utility
-│   ├── ps/                  # Active process status utility
+│   ├── cat/                 # File and standard stream concatenation utility
+│   ├── ps/                  # Active process status and process tree utility
 │   ├── test/                # Ring 3 automated verification suite
 │   ├── ifconfig/            # Network interface configuration utility
 │   ├── ping/                # ICMP Echo round-trip diagnostic tool
 │   ├── netstat/             # Active socket and protocol table inspector
 │   ├── nslookup/            # UDP DNS address resolution utility
 │   ├── netcat/              # Interactive TCP stream client
-│   └── echo-server/         # Concurrent TCP echo daemon on port 8080
+│   ├── echo-server/         # Concurrent TCP echo daemon on port 8080
+│   ├── secinfo/             # Kernel security posture query utility
+│   ├── kill/                # Signal transmission utility (-TERM, -KILL, etc.)
+│   ├── ipctest/             # Pipes, blocking I/O, and shared memory test suite
+│   ├── memtest/             # Memory isolation and protection fault test
+│   ├── crash/               # Controlled userspace #PF crash containment demo
+│   └── stressproc/          # Process lifecycle, IPC, and waitpid stress tool
 │
 ├── tools/
 │   ├── mkimage.c            # Cross-platform bootable disk image generator
@@ -784,7 +942,8 @@ nyota-os/
 │   ├── test_runner.py       # Automated QEMU userspace test suite
 │   ├── test_network.py      # Automated network verification test suite
 │   ├── test_internal_tcp.py # Internal loopback TCP echo server/client test
-│   └── test_tcp.py          # Host-to-guest external TCP connection test
+│   ├── test_tcp.py          # Host-to-guest external TCP connection test
+│   └── test_security.py     # Automated Phase 8 security, IPC, and isolation suite
 │
 ├── linker.ld                # 64-bit kernel linker script (load address 0x100000)
 ├── user.ld                  # Ring 3 user ELF linker script (virtual load 0x400000)
@@ -885,7 +1044,7 @@ make run-serial
               NYOTA OS                  
 ========================================
 
-Kernel       : v0.7.0
+Kernel       : v0.8.0
 Architecture : x86_64
 
 [ OK ] GDT
@@ -939,6 +1098,12 @@ Architecture : x86_64
 [INFO]  IP:  10.0.2.15
 [INFO]  Gateway: 10.0.2.2
 
+[ OK ] IPC
+[ OK ] Signals
+[ OK ] Permissions
+[ OK ] Capabilities
+[ OK ] Resource Limits
+
 [INFO]  Loading /init
 [ OK ]  ELF loaded
 [ OK ]  PID 1 started
@@ -949,37 +1114,45 @@ Architecture : x86_64
 [INIT] System initialization complete.
 [INIT] Starting userspace interactive shell (/bin/sh)...
 
-nyota$ ifconfig
-eth0: flags=UP,BROADCAST,RUNNING
-      ether 52:54:00:12:34:56
-      inet 10.0.2.15  netmask 255.255.255.0  broadcast 10.0.2.255
-      gateway 10.0.2.2  dns 10.0.2.3
-      mtu 1500
+nyota$ ps
+PID   PPID  UID   STATE       NAME
+1     0     0     RUNNING     init
+2     1     1000  RUNNING     sh
 
-lo:   flags=UP,LOOPBACK,RUNNING
-      inet 127.0.0.1  netmask 255.0.0.0
-      mtu 65536
+nyota$ secinfo
+Kernel security features
+------------------------
+User/kernel isolation : enabled
+Guard pages           : enabled
+User pointer checks   : enabled
+Capabilities          : enabled
+Resource limits       : enabled
+ASLR foundation       : enabled
+Active shared memory  : 0 segments
 
-nyota$ ping 10.0.2.2
-PING 10.0.2.2 (10.0.2.2): 56 data bytes
-64 bytes from 10.0.2.2: icmp_seq=1 time=2 ms
-64 bytes from 10.0.2.2: icmp_seq=2 time=1 ms
-64 bytes from 10.0.2.2: icmp_seq=3 time=2 ms
-64 bytes from 10.0.2.2: icmp_seq=4 time=1 ms
+nyota$ ipctest
+[ OK ] pipe communication
+[ OK ] blocking read
+[ OK ] shared memory
+[ OK ] permission checks
+[ OK ] cleanup
+All IPC tests passed successfully!
 
---- 10.0.2.2 ping statistics ---
-4 packets transmitted, 4 packets received, 0% packet loss
+nyota$ ls | cat
+bin
+dev
+etc
+home
+tmp
 
-nyota$ echo-server 8080 &
-[5] started in background
-nyota$ Listening on 0.0.0.0:8080...
+nyota$ crash
+[SEC] PID 8 exception: page fault, address: 0x0000000000000010, signal: SIGSEGV
+[PROC] PID 8 terminated
 
-nyota$ netcat 127.0.0.1 8080 HelloFromNyota
-Connecting to 127.0.0.1:8080...
-Client connected from 127.0.0.1:49152
-Connected to 127.0.0.1:8080!
-Received: HelloFromNyota
-Client disconnected.
+nyota$ ps
+PID   PPID  UID   STATE       NAME
+1     0     0     RUNNING     init
+2     1     1000  RUNNING     sh
 ```
 
 ---
@@ -1187,13 +1360,13 @@ Inside GDB:
 
 ---
 
-# ⚠️ Current Limitations (Phase 7)
+# ⚠️ Current Limitations (Phase 8)
 
-Phase 7 successfully implements a complete networking subsystem including PCI discovery, Intel 82540EM (E1000) Gigabit NIC driver with physical DMA descriptor rings, Ethernet II frames, dynamic ARP, IPv4 routing, ICMP echo replies, UDP datagrams, RFC 793 TCP state machine (3-way handshake, windowing, ACK/FIN/RST), BSD socket abstraction, 10 network system calls (Vectors 16..25), scheduler wait-queue sleep/wakeup integration, and full Ring 3 networking utilities (`ifconfig`, `ping`, `netstat`, `nslookup`, `netcat`, `echo-server`). The following subsystems belong to subsequent phases:
+Phase 8 successfully implements process hierarchy (parent/child trees, orphan adoption to PID 1), non-spinning process waiting (`waitpid`), zombie process lifecycle & reaping, full POSIX-style signals (`SIGTERM`, `SIGKILL`, `SIGSTOP`, `SIGCONT`, `SIGCHLD`, `SIGSEGV`, `SIGILL`, `SIGFPE`, `SIGPIPE`), safe Ring 3 CPU exception-to-signal conversion, anonymous pipes with blocking I/O and EOF/SIGPIPE semantics, VFS pipe integration and shell pipelines (`ls | cat`), controlled shared memory IPC (`shm_get/at/dt/ctl`), user identity (UID/GID), capability model (`CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_SYS_ADMIN`, `CAP_IPC_OWNER`, `CAP_KILL`), filesystem permissions (`vfs_chmod`, `vfs_chown`, protection of `/bin`, `/etc`, `/kernel`), per-process resource limits, centralized user pointer validation, stack guard pages, hardware-seeded PRNG, basic ASLR foundation, security audit logging, and 18 new system calls (Vectors 26..43). The following subsystems belong to subsequent phases:
 
-- Inter-Process Communication (IPC), anonymous and named pipes (`pipe`), and standard stream redirection (`|`) are deferred to Phase 8.
-- POSIX-style signals (`SIGINT`, `SIGKILL`, `SIGCHLD`, `signal`, `kill`) are deferred to Phase 8.
-- Advanced socket options (`SO_REUSEADDR`, `TCP_NODELAY`), DHCP, and IPv6 are deferred to future extensions.
+- Pseudo-terminals (PTYs), line disciplines, and POSIX `termios` control are deferred to Phase 9.
+- Advanced shell job control (foreground/background process groups, `tcsetpgrp`) and session management belong to Phase 9.
+- System timekeeping (RTC CMOS clock, wall-clock time, `gettimeofday`) and daemon/service managers are planned for Phase 9.
 
 ---
 
@@ -1300,10 +1473,30 @@ Phase 7: Networking, TCP/IP & Sockets            ◄ [COMPLETED]
    ├── Preemptive Scheduler Wait Queues & Non-Spinning Process Sleeping
    └── Ring 3 Network Utilities (ifconfig, ping, netstat, nslookup, netcat, echo-server)
 
-Phase 8: IPC, Pipes & Process Control            ◄ [NEXT]
-   ├── Anonymous & Named Pipes
-   ├── Standard Stream Redirection & Shell Piping (|)
-   └── POSIX-Style Signal Subsystem (SIGINT, SIGKILL, SIGCHLD)
+Phase 8: IPC, Security Hardening & Process Isolation ◄ [COMPLETED]
+   ├── Process Hierarchy (parent/child trees, orphan adoption to PID 1 init)
+   ├── Non-Spinning Process Waiting (waitpid, zombie process lifecycle & reaping)
+   ├── POSIX Signal Subsystem (SIGTERM, SIGKILL, SIGSTOP, SIGCONT, SIGCHLD, SIGSEGV, SIGILL, SIGFPE, SIGPIPE)
+   ├── Safe Ring 3 Exception-to-Signal Dispatch (#DE -> SIGFPE, #UD -> SIGILL, #GP/#PF -> SIGSEGV)
+   ├── Anonymous Pipes (pipe_t 4096-byte circular buffer, blocking read/write queues, EOF, SIGPIPE)
+   ├── VFS Pipe Integration & Shell Pipelines (ls | cat, cmd1 | cmd2)
+   ├── Controlled Shared Memory IPC (shm_get/at/dt/ctl, page-aligned, ref-counted, permission-checked)
+   ├── User Identity & Ownership (UID/GID, root UID 0 vs unprivileged user UID 1000)
+   ├── Capability System (CAP_NET_ADMIN, CAP_NET_RAW, CAP_SYS_ADMIN, CAP_IPC_OWNER, CAP_KILL)
+   ├── Filesystem Permission Enforcement (vfs_chmod, vfs_chown, protected /bin, /etc, /kernel)
+   ├── Resource Limits (max open files, memory, processes, sockets per task)
+   ├── Centralized Pointer & Buffer Validation (validate_user_pointer, copy_from/to_user, safe EFAULT)
+   ├── Integer Overflow Checks (size_add_overflow, size_mul_overflow)
+   ├── Stack Protection & Guard Pages (unmapped guard page below user stack base)
+   ├── Hardware-Seeded PRNG (kernel_random, SYS_GETRANDOM / getrandom) & ASLR Foundation
+   ├── Security Event Logging (security_log audit trail)
+   └── Ring 3 Security Suite (/bin/secinfo, /bin/kill, /bin/ipctest, /bin/memtest, /bin/crash, /bin/stressproc)
+
+Phase 9: Advanced Userland & System Services     ◄ [NEXT]
+   ├── Advanced Init Daemon & Service Manager (daemons, respawning, runlevels)
+   ├── Pseudo-Terminal Subsystem (PTYs, line disciplines, termios)
+   ├── Advanced Shell & Job Control (tcgetattr, foreground/background process groups)
+   └── System Timekeeping & Real-Time Clock (RTC CMOS, uptime, gettimeofday)
 ```
 
 ---

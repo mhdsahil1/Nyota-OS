@@ -34,6 +34,7 @@ interrupt_frame_t *scheduler_schedule(interrupt_frame_t *frame);
 /* Cooperative scheduling requests */
 void scheduler_yield(void);
 void scheduler_sleep(uint64_t ms);
+void scheduler_wake(process_t *proc);
 void scheduler_request_reschedule(void);
 
 /* Diagnostic inspection */

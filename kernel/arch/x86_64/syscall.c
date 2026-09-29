@@ -14,6 +14,35 @@
 #include "scheduler.h"
 #include "fs/vfs.h"
 #include "net/socket.h"
+#include "signal.h"
+#include "security/random.h"
+#include "security/capability.h"
+#include "security/security.h"
+#include "ipc/pipe.h"
+#include "ipc/shm.h"
+
+/* ── Integer Overflow & Validation Helpers ───────────────────────────────── */
+
+bool size_add_overflow(size_t a, size_t b, size_t *result) {
+    if (a > (size_t)-1 - b) return true;
+    if (result) *result = a + b;
+    return false;
+}
+
+bool size_mul_overflow(size_t a, size_t b, size_t *result) {
+    if (a != 0 && b > (size_t)-1 / a) return true;
+    if (result) *result = a * b;
+    return false;
+}
+
+bool user_validate_string(const char *ustr, size_t max_len) {
+    if (!ustr || max_len == 0) return false;
+    for (size_t i = 0; i < max_len; i++) {
+        if (!user_validate_pointer(ustr + i, 1, false)) return false;
+        if (ustr[i] == '\0') return true;
+    }
+    return false;
+}
 
 /* ── User Memory Validation ───────────────────────────────────────────────── */
 
@@ -266,9 +295,9 @@ static int64_t sys_handle_spawn(uint64_t path_uptr, uint64_t argv_uptr) {
     return (int64_t)child->pid;
 }
 
-static int64_t sys_handle_waitpid(uint64_t pid, uint64_t status_uptr) {
+static int64_t sys_handle_waitpid(uint64_t pid, uint64_t status_uptr, uint64_t options) {
     int kstatus = 0;
-    int res = process_waitpid((uint32_t)pid, &kstatus);
+    int res = process_waitpid((int32_t)pid, &kstatus, (int)options);
     if (res > 0 && status_uptr != 0) {
         if (user_validate_pointer((const void *)status_uptr, sizeof(int), true)) {
             copy_to_user((void *)status_uptr, &kstatus, sizeof(int));
@@ -280,6 +309,25 @@ static int64_t sys_handle_waitpid(uint64_t pid, uint64_t status_uptr) {
 /* ── Socket System Call Handlers ─────────────────────────────────────────── */
 
 static int64_t sys_handle_socket(int domain, int type, int protocol) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    /* Raw sockets require CAP_NET_RAW capability */
+    if (type == 3 /* SOCK_RAW */ && !has_capability(curr, CAP_NET_RAW)) {
+        return SYS_ERR_EPERM;
+    }
+
+    /* Enforce per-process socket limits */
+    if (curr->max_sockets > 0) {
+        uint32_t sock_count = 0;
+        for (int i = 0; i < MAX_PROCESS_FDS; i++) {
+            if (curr->fds[i] && curr->fds[i]->type == FILE_TYPE_SOCKET) sock_count++;
+        }
+        if (sock_count >= curr->max_sockets) {
+            return SYS_ERR_ENOSPC;
+        }
+    }
+
     socket_t *sock = socket_create(domain, type, protocol);
     if (!sock) return SYS_ERR_ENOMEM;
 
@@ -288,9 +336,6 @@ static int64_t sys_handle_socket(int domain, int type, int protocol) {
         socket_close(sock);
         return SYS_ERR_ENOMEM;
     }
-
-    process_t *curr = process_get_current();
-    if (!curr) return SYS_ERR_EBADF;
 
     int fd = vfs_alloc_fd(curr->fds, f);
     if (fd < 0) {
@@ -432,37 +477,216 @@ static int64_t sys_handle_shutdown(int fd, int how) {
     return socket_close((socket_t *)f->filesystem_data);
 }
 
+/* ── Phase 8: IPC, Security, and Signals Handlers ────────────────────────── */
+
+static int64_t sys_handle_pipe(uint64_t fds_uptr) {
+    if (!user_validate_pointer((void *)fds_uptr, sizeof(int) * 2, true)) {
+        return SYS_ERR_EFAULT;
+    }
+    int kfds[2] = {-1, -1};
+    int res = pipe_alloc_pair(kfds);
+    if (res != 0) return res;
+
+    copy_to_user((void *)fds_uptr, kfds, sizeof(int) * 2);
+    return 0;
+}
+
+static int64_t sys_handle_dup2(int oldfd, int newfd) {
+    return vfs_dup2(oldfd, newfd);
+}
+
+static int64_t sys_handle_kill(int pid, int sig) {
+    if (sig < 1 || sig > 31) return SYS_ERR_EINVAL;
+    process_t *target = process_find((uint32_t)pid);
+    if (!target) return SYS_ERR_ESRCH;
+
+    process_t *curr = process_get_current();
+    if (!can_signal_process(curr, target)) {
+        return SYS_ERR_EPERM;
+    }
+
+    return signal_send(target, sig);
+}
+
+static int64_t sys_handle_signal(int sig, uint64_t handler_uptr) {
+    if (sig < 1 || sig > 31) return SYS_ERR_EINVAL;
+    if (sig == SIGKILL || sig == SIGSTOP) return SYS_ERR_EINVAL;
+
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    uint64_t old_handler = curr->signal_handlers[sig];
+    curr->signal_handlers[sig] = handler_uptr;
+    return (int64_t)old_handler;
+}
+
+static int64_t sys_handle_getuid(void) {
+    process_t *curr = process_get_current();
+    return curr ? curr->uid : 0;
+}
+
+static int64_t sys_handle_setuid(uint32_t uid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    if (curr->uid != 0 && curr->uid != uid) {
+        return SYS_ERR_EPERM;
+    }
+    curr->uid = uid;
+    return 0;
+}
+
+static int64_t sys_handle_getgid(void) {
+    process_t *curr = process_get_current();
+    return curr ? curr->gid : 0;
+}
+
+static int64_t sys_handle_setgid(uint32_t gid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    if (curr->uid != 0 && curr->gid != gid) {
+        return SYS_ERR_EPERM;
+    }
+    curr->gid = gid;
+    return 0;
+}
+
+static int64_t sys_handle_chmod(uint64_t path_uptr, uint32_t mode) {
+    char kpath[256];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return vfs_chmod(kpath, mode);
+}
+
+static int64_t sys_handle_chown(uint64_t path_uptr, uint32_t uid, uint32_t gid) {
+    char kpath[256];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return vfs_chown(kpath, uid, gid);
+}
+
+static int64_t sys_handle_shm_get(int key, size_t size, int flags) {
+    return shm_get(key, size, flags);
+}
+
+static int64_t sys_handle_shm_at(int id, uint64_t addr, int flags) {
+    return (int64_t)shm_at(id, addr, flags);
+}
+
+static int64_t sys_handle_shm_dt(uint64_t addr) {
+    return shm_dt(addr);
+}
+
+static int64_t sys_handle_shm_ctl(int id, int cmd, uint64_t buf_uptr) {
+    return shm_ctl(id, cmd, (void *)buf_uptr);
+}
+
+static int64_t sys_handle_getrandom(uint64_t buf_uptr, size_t len) {
+    if (!user_validate_pointer((void *)buf_uptr, len, true)) {
+        return SYS_ERR_EFAULT;
+    }
+    if (len > 4096) len = 4096;
+    return kernel_getrandom((void *)buf_uptr, len, 0);
+}
+
+static int64_t sys_handle_spawn2(uint64_t path_uptr, uint64_t argv_uptr, int in_fd, int out_fd) {
+    char kpath[256];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    char *kargv[32] = {0};
+    char arg_bufs[32][64];
+
+    if (argv_uptr != 0) {
+        const char **uargv = (const char **)argv_uptr;
+        for (int i = 0; i < 31; i++) {
+            if (!user_validate_pointer(&uargv[i], sizeof(char *), false)) break;
+            const char *uarg = uargv[i];
+            if (!uarg) break;
+            if (copy_string_from_user(arg_bufs[i], uarg, sizeof(arg_bufs[i])) < 0) break;
+            kargv[i] = arg_bufs[i];
+        }
+    }
+
+    process_t *child = process_spawn_elf_redirect(kpath, kargv, in_fd, out_fd);
+    if (!child) return SYS_ERR_ENOENT;
+    return (int64_t)child->pid;
+}
+
+static int64_t sys_handle_secinfo(uint64_t info_uptr) {
+    if (!user_validate_pointer((void *)info_uptr, sizeof(secinfo_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+    return kernel_secinfo((secinfo_t *)info_uptr);
+}
+
+static int64_t sys_handle_getprocs(uint64_t uptr, size_t max_count) {
+    if (max_count > 64) max_count = 64;
+    size_t bytes = max_count * sizeof(proc_info_t);
+    if (!user_validate_pointer((void *)uptr, bytes, true)) {
+        return SYS_ERR_EFAULT;
+    }
+    proc_info_t kbuf[64];
+    int count = process_get_table(kbuf, max_count);
+    if (copy_to_user((void *)uptr, kbuf, count * sizeof(proc_info_t)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return count;
+}
+
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     switch (num) {
-        case SYS_WRITE:    return sys_handle_write(a1, a2, a3);
-        case SYS_EXIT:     return sys_handle_exit((int)a1);
-        case SYS_GETPID:   return sys_handle_getpid();
-        case SYS_YIELD:    return sys_handle_yield();
-        case SYS_SLEEP:    return sys_handle_sleep(a1);
-        case SYS_OPEN:     return sys_handle_open(a1, a2, a3);
-        case SYS_CLOSE:    return sys_handle_close(a1);
-        case SYS_READ:     return sys_handle_read(a1, a2, a3);
-        case SYS_SEEK:     return sys_handle_seek(a1, a2, a3);
-        case SYS_STAT:     return sys_handle_stat(a1, a2);
-        case SYS_GETDENTS: return sys_handle_getdents(a1, a2, a3);
-        case SYS_MKDIR:    return sys_handle_mkdir(a1, a2);
-        case SYS_CREATE:   return sys_handle_create(a1, a2);
-        case SYS_EXEC:     return sys_handle_exec(a1, a2);
-        case SYS_SPAWN:    return sys_handle_spawn(a1, a2);
-        case SYS_WAITPID:  return sys_handle_waitpid(a1, a2);
-        case SYS_SOCKET:   return sys_handle_socket((int)a1, (int)a2, (int)a3);
-        case SYS_BIND:     return sys_handle_bind((int)a1, a2, (size_t)a3);
-        case SYS_LISTEN:   return sys_handle_listen((int)a1, (int)a2);
-        case SYS_ACCEPT:   return sys_handle_accept((int)a1, a2, a3);
-        case SYS_CONNECT:  return sys_handle_connect((int)a1, a2, (size_t)a3);
-        case SYS_SEND:     return sys_handle_send((int)a1, a2, (size_t)a3, (int)a4);
-        case SYS_RECV:     return sys_handle_recv((int)a1, a2, (size_t)a3, (int)a4);
-        case SYS_SENDTO:   return sys_handle_sendto((int)a1, a2, (size_t)a3, (int)a4, a5, (size_t)a6);
-        case SYS_RECVFROM: return sys_handle_recvfrom((int)a1, a2, (size_t)a3, (int)a4, a5, a6);
-        case SYS_SHUTDOWN: return sys_handle_shutdown((int)a1, (int)a2);
-        default:           return SYS_ERR_ENOSYS;
+        case SYS_WRITE:     return sys_handle_write(a1, a2, a3);
+        case SYS_EXIT:      return sys_handle_exit((int)a1);
+        case SYS_GETPID:    return sys_handle_getpid();
+        case SYS_YIELD:     return sys_handle_yield();
+        case SYS_SLEEP:     return sys_handle_sleep(a1);
+        case SYS_OPEN:      return sys_handle_open(a1, a2, a3);
+        case SYS_CLOSE:     return sys_handle_close(a1);
+        case SYS_READ:      return sys_handle_read(a1, a2, a3);
+        case SYS_SEEK:      return sys_handle_seek(a1, a2, a3);
+        case SYS_STAT:      return sys_handle_stat(a1, a2);
+        case SYS_GETDENTS:  return sys_handle_getdents(a1, a2, a3);
+        case SYS_MKDIR:     return sys_handle_mkdir(a1, a2);
+        case SYS_CREATE:    return sys_handle_create(a1, a2);
+        case SYS_EXEC:      return sys_handle_exec(a1, a2);
+        case SYS_SPAWN:     return sys_handle_spawn(a1, a2);
+        case SYS_WAITPID:   return sys_handle_waitpid(a1, a2, a3);
+        case SYS_SOCKET:    return sys_handle_socket((int)a1, (int)a2, (int)a3);
+        case SYS_BIND:      return sys_handle_bind((int)a1, a2, (size_t)a3);
+        case SYS_LISTEN:    return sys_handle_listen((int)a1, (int)a2);
+        case SYS_ACCEPT:    return sys_handle_accept((int)a1, a2, a3);
+        case SYS_CONNECT:   return sys_handle_connect((int)a1, a2, (size_t)a3);
+        case SYS_SEND:      return sys_handle_send((int)a1, a2, (size_t)a3, (int)a4);
+        case SYS_RECV:      return sys_handle_recv((int)a1, a2, (size_t)a3, (int)a4);
+        case SYS_SENDTO:    return sys_handle_sendto((int)a1, a2, (size_t)a3, (int)a4, a5, (size_t)a6);
+        case SYS_RECVFROM:  return sys_handle_recvfrom((int)a1, a2, (size_t)a3, (int)a4, a5, a6);
+        case SYS_SHUTDOWN:  return sys_handle_shutdown((int)a1, (int)a2);
+        case SYS_PIPE:      return sys_handle_pipe(a1);
+        case SYS_DUP2:      return sys_handle_dup2((int)a1, (int)a2);
+        case SYS_KILL:      return sys_handle_kill((int)a1, (int)a2);
+        case SYS_SIGNAL:    return sys_handle_signal((int)a1, a2);
+        case SYS_GETUID:    return sys_handle_getuid();
+        case SYS_SETUID:    return sys_handle_setuid((uint32_t)a1);
+        case SYS_GETGID:    return sys_handle_getgid();
+        case SYS_SETGID:    return sys_handle_setgid((uint32_t)a1);
+        case SYS_CHMOD:     return sys_handle_chmod(a1, (uint32_t)a2);
+        case SYS_CHOWN:     return sys_handle_chown(a1, (uint32_t)a2, (uint32_t)a3);
+        case SYS_SHM_GET:   return sys_handle_shm_get((int)a1, (size_t)a2, (int)a3);
+        case SYS_SHM_AT:    return sys_handle_shm_at((int)a1, a2, (int)a3);
+        case SYS_SHM_DT:    return sys_handle_shm_dt(a1);
+        case SYS_SHM_CTL:   return sys_handle_shm_ctl((int)a1, (int)a2, a3);
+        case SYS_GETRANDOM: return sys_handle_getrandom(a1, (size_t)a2);
+        case SYS_SPAWN2:    return sys_handle_spawn2(a1, a2, (int)a3, (int)a4);
+        case SYS_SECINFO:   return sys_handle_secinfo(a1);
+        case SYS_GETPROCS:  return sys_handle_getprocs(a1, (size_t)a2);
+        default:            return SYS_ERR_ENOSYS;
     }
 }
 
@@ -480,6 +704,9 @@ void syscall_handler(interrupt_frame_t *frame) {
     );
 
     frame->rax = (uint64_t)ret;
+
+    /* Check and deliver any pending signals before returning to Ring 3 */
+    signal_check_and_deliver(frame);
 }
 
 /* ── Initialization ───────────────────────────────────────────────────────── */
@@ -713,7 +940,7 @@ int64_t sys_spawn(const char *path, char *const argv[]) {
     return ret;
 }
 
-int64_t sys_waitpid(uint32_t pid, int *status) {
+int64_t sys_waitpid(int32_t pid, int *status) {
     int64_t ret;
     __asm__ volatile (
         "mov %1, %%rdi\n"
@@ -890,6 +1117,259 @@ int64_t sys_shutdown(int fd, int how) {
         : "=r"(ret)
         : "r"((uint64_t)fd), "r"((uint64_t)how)
         : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_pipe(int fds[2]) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $26, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(fds)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_dup2(int oldfd, int newfd) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $27, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)oldfd), "r"((uint64_t)newfd)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_kill(int32_t pid, int sig) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $28, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)pid), "r"((uint64_t)sig)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_signal(int sig, void *handler) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $29, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)sig), "r"(handler)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+uint32_t sys_getuid(void) {
+    uint64_t ret;
+    __asm__ volatile (
+        "mov $30, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        :
+        : "rax", "rcx", "r11", "memory"
+    );
+    return (uint32_t)ret;
+}
+
+int64_t sys_setuid(uint32_t uid) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $31, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)uid)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+uint32_t sys_getgid(void) {
+    uint64_t ret;
+    __asm__ volatile (
+        "mov $32, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        :
+        : "rax", "rcx", "r11", "memory"
+    );
+    return (uint32_t)ret;
+}
+
+int64_t sys_setgid(uint32_t gid) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $33, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)gid)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_chmod(const char *path, uint32_t mode) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $34, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(path), "r"((uint64_t)mode)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $35, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(path), "r"((uint64_t)uid), "r"((uint64_t)gid)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_shm_get(uint32_t key, size_t size, int flags) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $36, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)key), "r"(size), "r"((uint64_t)flags)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+void *sys_shm_at(int shmid, const void *addr, int flags) {
+    uint64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $37, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)shmid), "r"(addr), "r"((uint64_t)flags)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return (void *)ret;
+}
+
+int64_t sys_shm_dt(const void *addr) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $38, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(addr)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_shm_ctl(int shmid, int cmd, void *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $39, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)shmid), "r"((uint64_t)cmd), "r"(buf)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_getrandom(void *buf, size_t len, unsigned int flags) {
+    (void)flags;
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $40, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(buf), "r"(len)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_spawn2(const char *path, char *const argv[], int in_fd, int out_fd) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $41, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(path), "r"(argv), "r"((uint64_t)in_fd), "r"((uint64_t)out_fd)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_secinfo(void *info) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $42, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(info)
+        : "rax", "rdi", "rcx", "r11", "memory"
     );
     return ret;
 }

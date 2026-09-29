@@ -18,12 +18,44 @@
 #include "user_programs.h"
 #include "fs/vfs.h"
 #include "elf/elf.h"
+#include "signal.h"
+#include "security/random.h"
+#include "security/capability.h"
+#include "ipc/shm.h"
 
 static process_t *process_table[PROCESS_MAX_COUNT] = {0};
 static process_t process_table_storage[PROCESS_MAX_COUNT];
 static uint8_t process_kernel_stacks[PROCESS_MAX_COUNT][16384] __attribute__((aligned(16)));
 static bool process_slot_in_use[PROCESS_MAX_COUNT] = {false};
 static uint32_t next_pid = 1;
+
+/* ── Process Hierarchy Management ─────────────────────────────────────────── */
+
+void process_add_child(process_t *parent, process_t *child) {
+    if (!parent || !child) return;
+    child->parent = parent;
+    child->parent_pid = parent->pid;
+    child->next_sibling = parent->children;
+    parent->children = child;
+}
+
+void process_remove_child(process_t *parent, process_t *child) {
+    if (!parent || !child) return;
+    if (parent->children == child) {
+        parent->children = child->next_sibling;
+        child->next_sibling = NULL;
+        return;
+    }
+    process_t *prev = parent->children;
+    while (prev && prev->next_sibling != child) {
+        prev = prev->next_sibling;
+    }
+    if (prev) {
+        prev->next_sibling = child->next_sibling;
+        child->next_sibling = NULL;
+    }
+}
+
 
 /* ── Process Management ───────────────────────────────────────────────────── */
 
@@ -64,9 +96,9 @@ size_t process_count(void) {
 
 /* ── Stack Setup Helper for argc / argv ───────────────────────────────────── */
 
-static uint64_t setup_user_stack(page_table_t *pml4, const char *path, char *const argv[], int *out_argc, uint64_t *out_user_argv) {
+static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const char *path, char *const argv[], int *out_argc, uint64_t *out_user_argv) {
     /* Determine top physical frame */
-    uint64_t top_page_vaddr = USER_STACK_TOP - PAGE_SIZE;
+    uint64_t top_page_vaddr = stack_top - PAGE_SIZE;
     uint64_t top_page_phys = paging_get_physical_in(pml4, top_page_vaddr);
     if (top_page_phys == 0) return 0;
 
@@ -82,7 +114,7 @@ static uint64_t setup_user_stack(page_table_t *pml4, const char *path, char *con
     }
 
     /* Stack pointer starts at top of stack page */
-    uint64_t user_rsp = USER_STACK_TOP;
+    uint64_t user_rsp = stack_top;
     uint32_t offset = PAGE_SIZE;
 
     uint64_t arg_user_addrs[32];
@@ -268,6 +300,18 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     memset(proc, 0, sizeof(process_t));
 
     process_t *curr = process_get_current();
+    if (curr && curr->max_processes > 0) {
+        uint32_t proc_cnt = 0;
+        for (process_t *c = curr->children; c != NULL; c = c->next_sibling) {
+            proc_cnt++;
+        }
+        if (proc_cnt >= curr->max_processes) {
+            kwarn("process_create_from_elf: process limit exceeded");
+            process_slot_in_use[slot] = false;
+            return NULL;
+        }
+    }
+
     proc->pid = next_pid++;
     proc->parent_pid = curr ? curr->pid : 0;
     proc->state = PROCESS_NEW;
@@ -298,9 +342,14 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     }
     proc->cr3 = (uint64_t)pml4;
 
-    /* Map user stack pages (16 KiB = 4 pages) */
-    uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
-    for (uint64_t sp = stack_base; sp < USER_STACK_TOP; sp += PAGE_SIZE) {
+    /* ASLR Foundation: randomize user stack top by 0 to 31 pages */
+    uint64_t aslr_offset = (kernel_random() & 0x1FULL) * PAGE_SIZE;
+    uint64_t stack_top = USER_STACK_TOP - aslr_offset;
+    uint64_t stack_base = stack_top - USER_STACK_SIZE;
+
+    /* Map user stack pages (16 KiB = 4 pages).
+     * The page immediately below stack_base is left unmapped as a guard page! */
+    for (uint64_t sp = stack_base; sp < stack_top; sp += PAGE_SIZE) {
         void *stack_phys = pmm_alloc_page();
         if (!stack_phys) {
             process_slot_in_use[slot] = false;
@@ -324,11 +373,36 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     /* Setup argc / argv on user stack */
     int argc = 0;
     uint64_t user_argv = 0;
-    uint64_t user_rsp = setup_user_stack(pml4, path, argv, &argc, &user_argv);
+    uint64_t user_rsp = setup_user_stack(pml4, stack_top, path, argv, &argc, &user_argv);
     if (user_rsp == 0) {
-        user_rsp = USER_STACK_TOP - 16;
+        user_rsp = stack_top - 16;
     }
     proc->user_stack_top = user_rsp;
+
+    /* Inherit credentials, permissions & resource limits */
+    if (curr) {
+        process_add_child(curr, proc);
+        proc->uid = curr->uid;
+        proc->gid = curr->gid;
+        proc->capabilities = curr->capabilities;
+        proc->max_memory = curr->max_memory ? curr->max_memory : (64 * 1024 * 1024ULL);
+        proc->max_open_files = curr->max_open_files ? curr->max_open_files : MAX_PROCESS_FDS;
+        proc->max_processes = curr->max_processes ? curr->max_processes : 16;
+        proc->max_sockets = curr->max_sockets ? curr->max_sockets : 16;
+    } else {
+        proc->parent = NULL;
+        proc->parent_pid = 0;
+        proc->uid = 0;
+        proc->gid = 0;
+        proc->capabilities = 0xFFFFFFFFFFFFFFFFULL;
+        proc->max_memory = 64 * 1024 * 1024ULL;
+        proc->max_open_files = MAX_PROCESS_FDS;
+        proc->max_processes = 16;
+        proc->max_sockets = 16;
+    }
+
+    signal_init_process(proc);
+    shm_process_init(proc);
 
     /* Fabricate initial interrupt_frame_t */
     interrupt_frame_t *frame = (interrupt_frame_t *)(proc->kernel_stack_top - sizeof(interrupt_frame_t));
@@ -356,6 +430,34 @@ process_t *process_spawn_elf(const char *path, char *const argv[]) {
     return process_create_from_elf(path, argv);
 }
 
+process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int in_fd, int out_fd) {
+    process_t *proc = process_create_from_elf(path, argv);
+    if (!proc) return NULL;
+
+    process_t *curr = process_get_current();
+    if (curr) {
+        if (in_fd >= 0 && in_fd < MAX_PROCESS_FDS && curr->fds[in_fd]) {
+            if (proc->fds[0]) {
+                file_t *old = proc->fds[0];
+                proc->fds[0] = NULL;
+                vfs_close_file(old);
+            }
+            proc->fds[0] = curr->fds[in_fd];
+            curr->fds[in_fd]->ref_count++;
+        }
+        if (out_fd >= 0 && out_fd < MAX_PROCESS_FDS && curr->fds[out_fd]) {
+            if (proc->fds[1]) {
+                file_t *old = proc->fds[1];
+                proc->fds[1] = NULL;
+                vfs_close_file(old);
+            }
+            proc->fds[1] = curr->fds[out_fd];
+            curr->fds[out_fd]->ref_count++;
+        }
+    }
+    return proc;
+}
+
 int process_exec(process_t *proc, const char *path, char *const argv[]) {
     if (!proc || !path) return NYOTA_EINVAL;
 
@@ -371,9 +473,13 @@ int process_exec(process_t *proc, const char *path, char *const argv[]) {
     page_table_t *new_pml4 = paging_create_address_space();
     if (!new_pml4) return NYOTA_ENOMEM;
 
-    /* Map stack in new address space */
-    uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
-    for (uint64_t sp = stack_base; sp < USER_STACK_TOP; sp += PAGE_SIZE) {
+    /* ASLR Stack top */
+    uint64_t aslr_offset = (kernel_random() & 0x1FULL) * PAGE_SIZE;
+    uint64_t stack_top = USER_STACK_TOP - aslr_offset;
+    uint64_t stack_base = stack_top - USER_STACK_SIZE;
+
+    /* Map stack in new address space (with guard page below stack_base) */
+    for (uint64_t sp = stack_base; sp < stack_top; sp += PAGE_SIZE) {
         void *stack_phys = pmm_alloc_page();
         if (!stack_phys) return NYOTA_ENOMEM;
         memset(stack_phys, 0, PAGE_SIZE);
@@ -389,8 +495,8 @@ int process_exec(process_t *proc, const char *path, char *const argv[]) {
     /* Setup argc / argv */
     int argc = 0;
     uint64_t user_argv = 0;
-    uint64_t user_rsp = setup_user_stack(new_pml4, path, argv, &argc, &user_argv);
-    if (user_rsp == 0) user_rsp = USER_STACK_TOP - 16;
+    uint64_t user_rsp = setup_user_stack(new_pml4, stack_top, path, argv, &argc, &user_argv);
+    if (user_rsp == 0) user_rsp = stack_top - 16;
 
     /* Switch process to new address space */
     proc->cr3 = (uint64_t)new_pml4;
@@ -424,49 +530,78 @@ int process_exec(process_t *proc, const char *path, char *const argv[]) {
     return NYOTA_OK;
 }
 
-int process_waitpid(uint32_t pid, int *status) {
-    process_t *child = process_find(pid);
-    if (!child) return NYOTA_ENOENT;
+int process_waitpid(int32_t pid, int *status, int options) {
+    (void)options;
+    process_t *curr = process_get_current();
+    if (!curr) return -NYOTA_EINVAL;
 
-    if (child->state != PROCESS_TERMINATED) {
-        return 0; /* Process still running */
-    }
+    bool has_children = false;
+    process_t *target_child = NULL;
 
-    if (status) {
-        *status = child->exit_status;
-    }
-
-    /* Reclaim process table slot */
-    for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
-        if (process_table[i] == child) {
-            process_table[i] = NULL;
-            process_slot_in_use[i] = false;
-            break;
+    for (process_t *c = curr->children; c != NULL; c = c->next_sibling) {
+        if (pid == -1 || (int32_t)c->pid == pid) {
+            has_children = true;
+            if (c->state == PROCESS_ZOMBIE || c->state == PROCESS_TERMINATED) {
+                target_child = c;
+                break;
+            }
         }
     }
 
-    return (int)pid;
+    if (target_child) {
+        int exit_val = target_child->exit_status;
+        uint32_t reaped_pid = target_child->pid;
+        if (status) {
+            *status = exit_val;
+        }
+
+        process_remove_child(curr, target_child);
+
+        for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
+            if (process_table[i] == target_child) {
+                process_table[i] = NULL;
+                process_slot_in_use[i] = false;
+                break;
+            }
+        }
+        return (int)reaped_pid;
+    }
+
+    if (!has_children) {
+        return -10; /* ECHILD */
+    }
+
+    /* Child is still running */
+    return 0;
 }
 
 void process_exit(int status) {
     process_t *curr = process_get_current();
     if (curr) {
-        curr->state = PROCESS_TERMINATED;
+        curr->state = PROCESS_ZOMBIE;
         curr->exit_status = status;
 
         /* Close all open file descriptors */
         vfs_close_process_fds(curr->fds);
 
-        /* Print exit information */
-        vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-        vga_print("[INFO] Process ");
-        vga_print_dec(curr->pid);
-        vga_print(" (");
-        vga_print(curr->name);
-        vga_print(") exited with status ");
-        vga_print_dec((uint64_t)status);
-        vga_println("");
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        /* Clean up attached shared memory */
+        shm_process_cleanup(curr);
+
+        /* Reparent orphaned children to PID 1 (init) */
+        process_t *init_proc = process_find(1);
+        while (curr->children) {
+            process_t *child = curr->children;
+            process_remove_child(curr, child);
+            if (init_proc && init_proc != curr) {
+                process_add_child(init_proc, child);
+            }
+        }
+
+        /* Wake and notify parent */
+        if (curr->parent) {
+            signal_send(curr->parent, SIGCHLD);
+            scheduler_wake(curr->parent);
+        }
 
         /* Remove from scheduler ready queue */
         scheduler_remove(curr);
@@ -482,6 +617,7 @@ static const char *state_to_string(process_state_t st) {
         case PROCESS_READY:      return "READY";
         case PROCESS_RUNNING:    return "RUNNING";
         case PROCESS_SLEEPING:   return "SLEEPING";
+        case PROCESS_ZOMBIE:     return "ZOMBIE";
         case PROCESS_TERMINATED: return "TERMINATED";
         case PROCESS_IDLE:       return "IDLE";
         default:                 return "UNKNOWN";
@@ -490,48 +626,70 @@ static const char *state_to_string(process_state_t st) {
 
 void process_list(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    vga_println("PID   STATE       RUNTIME      SWITCHES  NAME");
-    vga_println("--------------------------------------------------");
+    vga_println("PID   PPID  UID   STATE       NAME");
+    vga_println("----------------------------------------");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-
-    process_t *idle = scheduler_get_idle();
-    if (idle) {
-        vga_print_dec(idle->pid);
-        vga_print("     ");
-        vga_print(state_to_string(idle->state));
-        vga_print("        ");
-        vga_print_dec(idle->runtime_ticks);
-        vga_print("        ");
-        vga_print_dec(idle->context_switches);
-        vga_print("         ");
-        vga_println(idle->name);
-    }
 
     for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
         process_t *p = process_table[i];
         if (!p) continue;
 
+        /* PID */
         vga_print_dec(p->pid);
         if (p->pid < 10) vga_print("     ");
-        else vga_print("    ");
+        else if (p->pid < 100) vga_print("    ");
+        else vga_print("   ");
 
+        /* PPID */
+        vga_print_dec(p->parent_pid);
+        if (p->parent_pid < 10) vga_print("     ");
+        else if (p->parent_pid < 100) vga_print("    ");
+        else vga_print("   ");
+
+        /* UID */
+        vga_print_dec(p->uid);
+        if (p->uid < 10) vga_print("     ");
+        else if (p->uid < 100) vga_print("    ");
+        else if (p->uid < 1000) vga_print("   ");
+        else vga_print("  ");
+
+        /* STATE */
         const char *st = state_to_string(p->state);
         vga_print(st);
         size_t slen = strlen(st);
         for (size_t s = slen; s < 12; s++) vga_print(" ");
 
-        vga_print_dec(p->runtime_ticks);
-        if (p->runtime_ticks < 10) vga_print("          ");
-        else if (p->runtime_ticks < 100) vga_print("         ");
-        else vga_print("        ");
-
-        vga_print_dec(p->context_switches);
-        if (p->context_switches < 10) vga_print("         ");
-        else if (p->context_switches < 100) vga_print("        ");
-        else vga_print("       ");
-
+        /* NAME */
         vga_println(p->name);
     }
+}
+
+int process_get_table(proc_info_t *out, size_t max_count) {
+    if (!out || max_count == 0) return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < PROCESS_MAX_COUNT && count < max_count; i++) {
+        process_t *p = process_table[i];
+        if (!p) continue;
+        out[count].pid = p->pid;
+        out[count].ppid = p->parent_pid;
+        out[count].uid = p->uid;
+        const char *st = state_to_string(p->state);
+        size_t sidx = 0;
+        while (sidx < sizeof(out[count].state) - 1 && st && st[sidx]) {
+            out[count].state[sidx] = st[sidx];
+            sidx++;
+        }
+        out[count].state[sidx] = '\0';
+
+        size_t nidx = 0;
+        while (nidx < sizeof(out[count].name) - 1 && p->name[nidx]) {
+            out[count].name[nidx] = p->name[nidx];
+            nidx++;
+        }
+        out[count].name[nidx] = '\0';
+        count++;
+    }
+    return (int)count;
 }
 
 /* ── Launch First Userspace Process (/init) ───────────────────────────────── */

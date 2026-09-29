@@ -49,6 +49,7 @@ void paging_invlpg(uint64_t virt);
 bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);
 bool paging_unmap_page(uint64_t virt);
+bool paging_unmap_page_in(page_table_t *pml4, uint64_t virt);
 uint64_t paging_get_physical(uint64_t virt);
 uint64_t paging_get_physical_in(page_table_t *pml4, uint64_t virt);
 

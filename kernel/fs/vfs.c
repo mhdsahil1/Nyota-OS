@@ -6,6 +6,7 @@
 #include "fs/vfs.h"
 #include "fs/nyotafs.h"
 #include "net/socket.h"
+#include "ipc/pipe.h"
 #include "process.h"
 #include "heap.h"
 #include "memory.h"
@@ -69,7 +70,7 @@ file_t *vfs_create_socket_file(void *sock_ptr) {
     return NULL;
 }
 
-static file_t *alloc_file_object(void) {
+file_t *vfs_alloc_file(void) {
     for (size_t i = 0; i < MAX_OPEN_FILES; i++) {
         if (global_file_table[i].ref_count == 0) {
             memset(&global_file_table[i], 0, sizeof(file_t));
@@ -79,6 +80,7 @@ static file_t *alloc_file_object(void) {
     }
     return NULL;
 }
+#define alloc_file_object vfs_alloc_file
 
 static void free_file_object(file_t *f) {
     if (!f) return;
@@ -87,6 +89,8 @@ static void free_file_object(file_t *f) {
         if (f->ref_count == 0) {
             if (f->type == FILE_TYPE_SOCKET && f->filesystem_data) {
                 socket_close((socket_t *)f->filesystem_data);
+            } else if (f->type == FILE_TYPE_PIPE && f->filesystem_data) {
+                pipe_close_file(f);
             }
             memset(f, 0, sizeof(file_t));
         }
@@ -153,6 +157,12 @@ int vfs_close_process_fds(file_t **fds) {
     return NYOTA_OK;
 }
 
+int vfs_close_file(file_t *f) {
+    if (!f) return NYOTA_EINVAL;
+    free_file_object(f);
+    return NYOTA_OK;
+}
+
 static file_t *get_process_file(int fd) {
     if (fd < 0 || fd >= MAX_PROCESS_FDS) return NULL;
     process_t *curr = process_get_current();
@@ -209,6 +219,44 @@ int vfs_open(const char *path, int flags, int mode) {
         return NYOTA_EIO;
     }
 
+    /* Permission checks */
+    if (curr->uid != 0) {
+        bool need_read = ((flags & O_ACCMODE) == O_RDONLY) || ((flags & O_ACCMODE) == O_RDWR);
+        bool need_write = ((flags & O_ACCMODE) == O_WRONLY) || ((flags & O_ACCMODE) == O_RDWR) || (flags & O_TRUNC);
+
+        /* Protect system binaries and directories from modification */
+        if (need_write) {
+            if (strncmp(path, "/bin/", 5) == 0 || strncmp(path, "bin/", 4) == 0 ||
+                strncmp(path, "/etc/", 5) == 0 || strncmp(path, "etc/", 4) == 0 ||
+                strncmp(path, "/kernel", 7) == 0 || strncmp(path, "kernel", 6) == 0) {
+                return NYOTA_EACCES;
+            }
+        }
+
+        uint32_t perms = inode.mode & 0777;
+        bool allowed = false;
+        if (curr->uid == inode.uid) {
+            bool ok = true;
+            if (need_read && !(perms & 0400)) ok = false;
+            if (need_write && !(perms & 0200)) ok = false;
+            if (ok) allowed = true;
+        } else if (curr->gid == inode.gid) {
+            bool ok = true;
+            if (need_read && !(perms & 0040)) ok = false;
+            if (need_write && !(perms & 0020)) ok = false;
+            if (ok) allowed = true;
+        } else {
+            bool ok = true;
+            if (need_read && !(perms & 0004)) ok = false;
+            if (need_write && !(perms & 0002)) ok = false;
+            if (ok) allowed = true;
+        }
+
+        if (!allowed) {
+            return NYOTA_EACCES;
+        }
+    }
+
     file_t *f = alloc_file_object();
     if (!f) return NYOTA_ENOMEM;
 
@@ -251,6 +299,24 @@ int vfs_close(int fd) {
     return NYOTA_OK;
 }
 
+int vfs_dup2(int oldfd, int newfd) {
+    process_t *curr = process_get_current();
+    if (!curr) return NYOTA_EBADF;
+    if (oldfd < 0 || oldfd >= MAX_PROCESS_FDS) return NYOTA_EBADF;
+    if (newfd < 0 || newfd >= MAX_PROCESS_FDS) return NYOTA_EBADF;
+    if (!curr->fds[oldfd]) return NYOTA_EBADF;
+    if (oldfd == newfd) return newfd;
+
+    if (curr->fds[newfd]) {
+        free_file_object(curr->fds[newfd]);
+        curr->fds[newfd] = NULL;
+    }
+
+    curr->fds[newfd] = curr->fds[oldfd];
+    curr->fds[oldfd]->ref_count++;
+    return newfd;
+}
+
 int64_t vfs_read(int fd, void *buf, size_t count) {
     if (count == 0) return 0;
     if (!buf) return NYOTA_EFAULT;
@@ -287,6 +353,10 @@ int64_t vfs_read(int fd, void *buf, size_t count) {
 
     if (f->type == FILE_TYPE_SOCKET) {
         return socket_recv((socket_t *)f->filesystem_data, buf, count, 0);
+    }
+
+    if (f->type == FILE_TYPE_PIPE) {
+        return pipe_read((pipe_t *)f->filesystem_data, buf, count);
     }
 
     if (f->type == FILE_TYPE_REGULAR) {
@@ -335,6 +405,10 @@ int64_t vfs_write(int fd, const void *buf, size_t count) {
 
     if (f->type == FILE_TYPE_SOCKET) {
         return socket_send((socket_t *)f->filesystem_data, buf, count, 0);
+    }
+
+    if (f->type == FILE_TYPE_PIPE) {
+        return pipe_write((pipe_t *)f->filesystem_data, buf, count);
     }
 
     if (f->type == FILE_TYPE_REGULAR) {
@@ -428,9 +502,9 @@ int vfs_fstat(int fd, vfs_stat_t *st) {
     file_t *f = get_process_file(fd);
     if (!f) return NYOTA_EBADF;
 
-    if (f->type == FILE_TYPE_DEV_CONSOLE || f->type == FILE_TYPE_DEV_NULL || f->type == FILE_TYPE_SOCKET) {
+    if (f->type == FILE_TYPE_DEV_CONSOLE || f->type == FILE_TYPE_DEV_NULL || f->type == FILE_TYPE_SOCKET || f->type == FILE_TYPE_PIPE) {
         st->inode = 0;
-        st->mode = (f->type == FILE_TYPE_SOCKET ? 0140666 : (NYOTA_MODE_DEV | 0666));
+        st->mode = (f->type == FILE_TYPE_SOCKET ? 0140666 : (f->type == FILE_TYPE_PIPE ? 0010660 : (NYOTA_MODE_DEV | 0666)));
         st->size = 0;
         st->uid = 0;
         st->gid = 0;
@@ -504,4 +578,61 @@ int vfs_mkdir(const char *path, int mode) {
     if (!path) return NYOTA_EFAULT;
     if (!root_mounted) return NYOTA_ENODEV;
     return nyotafs_mkdir(&root_filesystem, path, (uint32_t)mode, NULL);
+}
+
+int vfs_chmod(const char *path, uint32_t mode) {
+    if (!path) return NYOTA_EFAULT;
+    if (!root_mounted) return NYOTA_ENODEV;
+    process_t *curr = process_get_current();
+    if (!curr) return NYOTA_EBADF;
+
+    uint64_t inode_num = 0;
+    if (nyotafs_resolve_path(&root_filesystem, path, &inode_num) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    nyota_inode_t inode;
+    if (nyotafs_read_inode(&root_filesystem, inode_num, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+
+    /* Only owner or root (UID 0) can chmod */
+    if (curr->uid != 0 && curr->uid != inode.uid) {
+        return NYOTA_EPERM;
+    }
+
+    inode.mode = (inode.mode & NYOTA_MODE_TYPE_MASK) | (mode & 07777);
+    if (nyotafs_write_inode(&root_filesystem, inode_num, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+    return NYOTA_OK;
+}
+
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
+    if (!path) return NYOTA_EFAULT;
+    if (!root_mounted) return NYOTA_ENODEV;
+    process_t *curr = process_get_current();
+    if (!curr) return NYOTA_EBADF;
+
+    /* Only root (UID 0) can chown arbitrarily */
+    if (curr->uid != 0) {
+        return NYOTA_EPERM;
+    }
+
+    uint64_t inode_num = 0;
+    if (nyotafs_resolve_path(&root_filesystem, path, &inode_num) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    nyota_inode_t inode;
+    if (nyotafs_read_inode(&root_filesystem, inode_num, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+
+    inode.uid = uid;
+    inode.gid = gid;
+    if (nyotafs_write_inode(&root_filesystem, inode_num, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+    return NYOTA_OK;
 }

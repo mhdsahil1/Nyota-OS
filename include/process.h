@@ -20,12 +20,13 @@
 #define PROCESS_NAME_MAX        32
 #define PROCESS_MAX_COUNT       32
 
-/* Process States (Phase 5/6 Lifecycle) */
+/* Process States (Phase 5/6/8 Lifecycle) */
 typedef enum {
     PROCESS_NEW = 0,
     PROCESS_READY,
     PROCESS_RUNNING,
     PROCESS_SLEEPING,
+    PROCESS_ZOMBIE,
     PROCESS_TERMINATED,
     PROCESS_IDLE
 } process_state_t;
@@ -38,6 +39,21 @@ typedef struct process {
     process_state_t state;
     int exit_status;
 
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t capabilities;
+
+    /* Resource limits */
+    uint64_t max_memory;
+    uint32_t max_open_files;
+    uint32_t max_processes;
+    uint32_t max_sockets;
+
+    /* Signals */
+    uint32_t pending_signals;
+    uint32_t blocked_signals;
+    uint64_t signal_handlers[32];
+
     uint64_t entry_point;
     uint64_t user_stack_top;
     uint64_t kernel_stack;       /* Allocated kernel stack base */
@@ -48,9 +64,22 @@ typedef struct process {
 
     file_t *fds[MAX_PROCESS_FDS];/* Per-process file descriptor table */
 
+    /* Shared memory attachments (up to 8) */
+    int shm_ids[8];
+    uint64_t shm_addrs[8];
+    uint32_t shm_count;
+
     uint64_t wakeup_tick;        /* Absolute timer tick to wake from SLEEPING */
     uint64_t runtime_ticks;      /* Total PIT ticks spent in RUNNING state */
     uint64_t context_switches;   /* Number of times scheduled */
+
+    /* Process hierarchy tree */
+    struct process *parent;
+    struct process *children;
+    struct process *next_sibling;
+
+    /* Waiter sleeping in waitpid */
+    struct process *wait_parent;
 
     struct process *next;        /* Queue link (Ready / Sleep / Process list) */
     struct process *prev;
@@ -62,12 +91,22 @@ void process_system_init(void);
 process_t *process_create(const char *name, uint64_t entry_point, const void *code_blob, size_t code_size);
 process_t *process_create_from_elf(const char *path, char *const argv[]);
 process_t *process_spawn_elf(const char *path, char *const argv[]);
+process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int in_fd, int out_fd);
 int process_exec(process_t *proc, const char *path, char *const argv[]);
-int process_waitpid(uint32_t pid, int *status);
+int process_waitpid(int32_t pid, int *status, int options);
+
+typedef struct {
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t uid;
+    char state[16];
+    char name[32];
+} proc_info_t;
 
 process_t *process_find(uint32_t pid);
 size_t process_count(void);
 void process_list(void);
+int process_get_table(proc_info_t *out, size_t max_count);
 
 process_t *process_get_current(void);
 void process_set_current(process_t *proc);

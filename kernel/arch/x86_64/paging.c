@@ -116,8 +116,8 @@ bool paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
     return paging_map_page_in(kernel_pml4, virt, phys, flags);
 }
 
-bool paging_unmap_page(uint64_t virt) {
-    if (!kernel_pml4) return false;
+bool paging_unmap_page_in(page_table_t *pml4, uint64_t virt) {
+    if (!pml4) return false;
 
     virt = PAGE_ALIGN_DOWN(virt);
 
@@ -126,8 +126,8 @@ bool paging_unmap_page(uint64_t virt) {
     uint64_t pd_i   = PD_INDEX(virt);
     uint64_t pt_i   = PT_INDEX(virt);
 
-    if (!(kernel_pml4->entries[pml4_i] & PAGE_PRESENT)) return false;
-    page_table_t *pdpt = (page_table_t *)(kernel_pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
+    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) return false;
+    page_table_t *pdpt = (page_table_t *)(pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
 
     if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) return false;
     page_table_t *pd = (page_table_t *)(pdpt->entries[pdpt_i] & PAGE_ENTRY_ADDR_MASK);
@@ -143,6 +143,10 @@ bool paging_unmap_page(uint64_t virt) {
     paging_invlpg(virt);
 
     return true;
+}
+
+bool paging_unmap_page(uint64_t virt) {
+    return paging_unmap_page_in(kernel_pml4, virt);
 }
 
 uint64_t paging_get_physical_in(page_table_t *pml4, uint64_t virt) {

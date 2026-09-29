@@ -84,7 +84,76 @@ void yield(void);
 int sleep(uint64_t ms);
 int exec(const char *path, char *const argv[]);
 int spawn(const char *path, char *const argv[]);
+int spawn2(const char *path, char *const argv[], int in_fd, int out_fd);
 int waitpid(int pid, int *status);
+
+/* Signals */
+#define SIGHUP          1
+#define SIGINT          2
+#define SIGQUIT         3
+#define SIGILL          4
+#define SIGTRAP         5
+#define SIGABRT         6
+#define SIGFPE          8
+#define SIGKILL         9
+#define SIGSEGV         11
+#define SIGPIPE         13
+#define SIGALRM         14
+#define SIGTERM         15
+#define SIGCHLD         17
+#define SIGCONT         18
+#define SIGSTOP         19
+
+#define SIG_DFL         ((void (*)(int))0)
+#define SIG_IGN         ((void (*)(int))1)
+
+/* IPC & Security System Calls */
+int pipe(int fds[2]);
+int dup2(int oldfd, int newfd);
+int kill(int pid, int sig);
+int signal(int sig, void (*handler)(int));
+uint32_t getuid(void);
+int setuid(uint32_t uid);
+uint32_t getgid(void);
+int setgid(uint32_t gid);
+int chmod(const char *path, uint32_t mode);
+int chown(const char *path, uint32_t uid, uint32_t gid);
+
+#define IPC_CREAT       01000
+#define IPC_EXCL        02000
+#define IPC_RMID        0
+#define IPC_STAT        1
+
+int shm_get(uint32_t key, size_t size, int flags);
+void *shm_at(int shmid, const void *addr, int flags);
+int shm_dt(const void *addr);
+int shm_ctl(int shmid, int cmd, void *buf);
+
+int64_t getrandom(void *buf, size_t len, unsigned int flags);
+
+typedef struct secinfo {
+    bool isolation_enabled;
+    bool guard_pages_enabled;
+    bool pointer_validation_enabled;
+    bool capabilities_enabled;
+    bool resource_limits_enabled;
+    bool aslr_enabled;
+    uint32_t active_processes;
+    uint32_t active_pipes;
+    uint32_t active_shm_segments;
+} secinfo_t;
+
+int secinfo(secinfo_t *info);
+
+typedef struct {
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t uid;
+    char state[16];
+    char name[32];
+} proc_info_t;
+
+int getprocs(proc_info_t *buf, size_t max_count);
 
 /* BSD Socket Constants */
 #define AF_UNSPEC       0

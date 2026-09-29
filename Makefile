@@ -131,7 +131,13 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/icmp.o             \
     $(BUILD_DIR)/udp.o              \
     $(BUILD_DIR)/tcp.o              \
-    $(BUILD_DIR)/socket.o
+    $(BUILD_DIR)/socket.o           \
+    $(BUILD_DIR)/signal.o           \
+    $(BUILD_DIR)/capability.o       \
+    $(BUILD_DIR)/random.o           \
+    $(BUILD_DIR)/security.o         \
+    $(BUILD_DIR)/pipe.o             \
+    $(BUILD_DIR)/shm.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -152,7 +158,13 @@ USER_BINARIES := \
     fs/root/bin/netstat  \
     fs/root/bin/nslookup \
     fs/root/bin/netcat   \
-    fs/root/bin/echo-server
+    fs/root/bin/echo-server \
+    fs/root/bin/secinfo  \
+    fs/root/bin/kill     \
+    fs/root/bin/ipctest  \
+    fs/root/bin/memtest  \
+    fs/root/bin/crash    \
+    fs/root/bin/stressproc
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
@@ -430,6 +442,30 @@ $(BUILD_DIR)/tcp.o: kernel/net/tcp.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/socket.o: kernel/net/socket.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/net/socket.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/signal.o: kernel/process/signal.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/process/signal.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/capability.o: kernel/security/capability.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/security/capability.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/random.o: kernel/security/random.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/security/random.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/security.o: kernel/security/security.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/security/security.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pipe.o: kernel/ipc/pipe.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/ipc/pipe.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/shm.o: kernel/ipc/shm.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/ipc/shm.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────
