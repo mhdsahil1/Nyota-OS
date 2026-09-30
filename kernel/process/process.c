@@ -24,8 +24,9 @@
 #include "ipc/shm.h"
 #include "timer.h"
 #include "syscall.h"
+#include "drivers/tty.h"
 
-static process_t *process_table[PROCESS_MAX_COUNT] = {0};
+process_t *process_table[PROCESS_MAX_COUNT] = {0};
 static process_t process_table_storage[PROCESS_MAX_COUNT];
 static uint8_t process_kernel_stacks[PROCESS_MAX_COUNT][16384] __attribute__((aligned(16)));
 static bool process_slot_in_use[PROCESS_MAX_COUNT] = {false};
@@ -315,8 +316,13 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
 
 /* ── Create Process from ELF Executable (Phase 6 Core) ────────────────────── */
 
-process_t *process_create_from_elf(const char *path, char *const argv[]) {
+process_t *process_create_from_elf_env(const char *path, char *const argv[], char *const envp[]) {
     if (!path) return NULL;
+
+    char norm_path[256];
+    if (vfs_normalize_path(path, norm_path, sizeof(norm_path)) == 0) {
+        path = norm_path;
+    }
 
     nyota_fs_t *fs = vfs_get_root_fs();
     if (!fs) {
@@ -347,7 +353,7 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     memset(proc, 0, sizeof(process_t));
 
     process_t *curr = process_get_current();
-    if (curr && curr->max_processes > 0) {
+    if (curr && curr->pid > 0 && curr->max_processes > 0) {
         uint32_t proc_cnt = 0;
         for (process_t *c = curr->children; c != NULL; c = c->next_sibling) {
             proc_cnt++;
@@ -360,7 +366,7 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     }
 
     proc->pid = next_pid++;
-    proc->parent_pid = curr ? curr->pid : 0;
+    proc->parent_pid = (curr && curr->pid > 0) ? curr->pid : 0;
     proc->state = PROCESS_NEW;
     proc->exit_status = 0;
 
@@ -417,18 +423,46 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
 
     proc->entry_point = entry_point;
 
+    /* Populate environment block */
+    if (envp && envp[0]) {
+        proc->env_count = 0;
+        for (int i = 0; envp[i] != NULL && i < PROCESS_ENV_MAX_VARS; i++) {
+            strncpy(proc->env[proc->env_count], envp[i], PROCESS_ENV_MAX_LEN - 1);
+            proc->env[proc->env_count][PROCESS_ENV_MAX_LEN - 1] = '\0';
+            proc->env_count++;
+        }
+    } else if (curr && curr->pid > 0 && curr->env_count > 0) {
+        proc->env_count = (curr->env_count > PROCESS_ENV_MAX_VARS) ? PROCESS_ENV_MAX_VARS : curr->env_count;
+        for (uint32_t i = 0; i < proc->env_count; i++) {
+            memcpy(proc->env[i], curr->env[i], PROCESS_ENV_MAX_LEN);
+        }
+    } else {
+        proc->env_count = 5;
+        strcpy(proc->env[0], "PATH=/bin:/sbin");
+        strcpy(proc->env[1], "USER=sahil");
+        strcpy(proc->env[2], "HOME=/home/sahil");
+        strcpy(proc->env[3], "SHELL=/bin/sh");
+        strcpy(proc->env[4], "PWD=/");
+    }
+
+    char *envp_ptrs[PROCESS_ENV_MAX_VARS + 1];
+    for (uint32_t i = 0; i < proc->env_count; i++) {
+        envp_ptrs[i] = proc->env[i];
+    }
+    envp_ptrs[proc->env_count] = NULL;
+
     /* Setup argc / argv / envp on user stack */
     int argc = 0;
     uint64_t user_argv = 0;
     uint64_t user_envp = 0;
-    uint64_t user_rsp = setup_user_stack(pml4, stack_top, path, argv, NULL, &argc, &user_argv, &user_envp);
+    uint64_t user_rsp = setup_user_stack(pml4, stack_top, path, argv, envp_ptrs, &argc, &user_argv, &user_envp);
     if (user_rsp == 0) {
         user_rsp = stack_top - 16;
     }
     proc->user_stack_top = user_rsp;
 
     /* Inherit credentials, permissions, working dir & resource limits */
-    if (curr) {
+    if (curr && curr->pid > 0) {
         process_add_child(curr, proc);
         proc->uid = curr->uid;
         proc->gid = curr->gid;
@@ -438,6 +472,8 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
         proc->max_processes = curr->max_processes ? curr->max_processes : 16;
         proc->max_sockets = curr->max_sockets ? curr->max_sockets : 16;
         proc->pgrp = curr->pgrp ? curr->pgrp : proc->pid;
+        proc->sid = curr->sid ? curr->sid : proc->pid;
+        proc->controlling_tty = curr->controlling_tty;
         if (curr->cwd[0] != '\0') {
             size_t clen = strlen(curr->cwd);
             if (clen >= sizeof(proc->cwd)) clen = sizeof(proc->cwd) - 1;
@@ -458,6 +494,8 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
         proc->max_processes = 16;
         proc->max_sockets = 16;
         proc->pgrp = proc->pid;
+        proc->sid = proc->pid;
+        proc->controlling_tty = 0;
         proc->cwd[0] = '/';
         proc->cwd[1] = '\0';
     }
@@ -489,12 +527,20 @@ process_t *process_create_from_elf(const char *path, char *const argv[]) {
     return proc;
 }
 
+process_t *process_create_from_elf(const char *path, char *const argv[]) {
+    return process_create_from_elf_env(path, argv, NULL);
+}
+
 process_t *process_spawn_elf(const char *path, char *const argv[]) {
-    return process_create_from_elf(path, argv);
+    return process_create_from_elf_env(path, argv, NULL);
 }
 
 process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int in_fd, int out_fd) {
-    process_t *proc = process_create_from_elf(path, argv);
+    return process_spawn_elf_env(path, argv, NULL, in_fd, out_fd);
+}
+
+process_t *process_spawn_elf_env(const char *path, char *const argv[], char *const envp[], int in_fd, int out_fd) {
+    process_t *proc = process_create_from_elf_env(path, argv, envp);
     if (!proc) return NULL;
 
     process_t *curr = process_get_current();
@@ -523,6 +569,11 @@ process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int 
 
 int process_execve(process_t *proc, const char *path, char *const argv[], char *const envp[]) {
     if (!proc || !path) return NYOTA_EINVAL;
+
+    char norm_path[256];
+    if (vfs_normalize_path(path, norm_path, sizeof(norm_path)) == 0) {
+        path = norm_path;
+    }
 
     nyota_fs_t *fs = vfs_get_root_fs();
     if (!fs) return NYOTA_ENODEV;
@@ -555,11 +606,27 @@ int process_execve(process_t *proc, const char *path, char *const argv[], char *
         return elf_status;
     }
 
+    /* Update environment block if envp supplied */
+    if (envp && envp[0]) {
+        proc->env_count = 0;
+        for (int i = 0; envp[i] != NULL && i < PROCESS_ENV_MAX_VARS; i++) {
+            strncpy(proc->env[proc->env_count], envp[i], PROCESS_ENV_MAX_LEN - 1);
+            proc->env[proc->env_count][PROCESS_ENV_MAX_LEN - 1] = '\0';
+            proc->env_count++;
+        }
+    }
+
+    char *envp_ptrs[PROCESS_ENV_MAX_VARS + 1];
+    for (uint32_t i = 0; i < proc->env_count; i++) {
+        envp_ptrs[i] = proc->env[i];
+    }
+    envp_ptrs[proc->env_count] = NULL;
+
     /* Setup argc / argv / envp */
     int argc = 0;
     uint64_t user_argv = 0;
     uint64_t user_envp = 0;
-    uint64_t user_rsp = setup_user_stack(new_pml4, stack_top, path, argv, envp, &argc, &user_argv, &user_envp);
+    uint64_t user_rsp = setup_user_stack(new_pml4, stack_top, path, argv, envp_ptrs, &argc, &user_argv, &user_envp);
     if (user_rsp == 0) user_rsp = stack_top - 16;
 
     /* Switch process to new address space */
@@ -613,6 +680,12 @@ int process_waitpid(int32_t pid, int *status, int options) {
                 if (c->state == PROCESS_ZOMBIE || c->state == PROCESS_TERMINATED) {
                     target_child = c;
                     break;
+                }
+                if ((options & WUNTRACED) && c->state == PROCESS_STOPPED) {
+                    if (status) {
+                        *status = (SIGTSTP << 8) | 0x7F;
+                    }
+                    return (int)c->pid;
                 }
             }
         }
@@ -690,6 +763,14 @@ void process_exit(int status) {
             scheduler_wake(curr->parent);
         }
 
+        /* Restore terminal foreground if exiting process had foreground control */
+        tty_t *tty = tty_get_current();
+        if (tty && (tty->foreground_pgrp == curr->pid || tty->foreground_pgrp == curr->pgrp)) {
+            if (curr->parent && curr->parent->pid > 0) {
+                tty_set_foreground_pgrp(tty, curr->parent->pgrp);
+            }
+        }
+
         /* Remove from scheduler ready queue */
         scheduler_remove(curr);
         scheduler_request_reschedule();
@@ -709,6 +790,7 @@ static const char *state_to_string(process_state_t st) {
         case PROCESS_READY:      return "READY";
         case PROCESS_RUNNING:    return "RUNNING";
         case PROCESS_SLEEPING:   return "SLEEPING";
+        case PROCESS_STOPPED:    return "STOPPED";
         case PROCESS_ZOMBIE:     return "ZOMBIE";
         case PROCESS_TERMINATED: return "TERMINATED";
         case PROCESS_IDLE:       return "IDLE";

@@ -65,12 +65,12 @@ static void tty_wake_waiters(tty_t *tty) {
     }
 }
 
-static void tty_send_signal_to_foreground(tty_t *tty, int sig) {
+void tty_send_signal_to_foreground(tty_t *tty, int sig) {
     if (!tty) return;
 
-    /* If specific pgrp is set, signal matching process */
+    /* If specific pgrp is set, broadcast signal to matching process group */
     if (tty->foreground_pgrp > 0) {
-        signal_send_pid(tty->foreground_pgrp, sig);
+        signal_send_pgrp(tty->foreground_pgrp, sig);
         return;
     }
 
@@ -110,7 +110,20 @@ void tty_handle_key(char c) {
     /* Handle Ctrl+D (EOF) */
     if (c == 4) {
         if (tty->line_len == 0) {
-            /* Signal EOF by waking waiter with 0 available bytes */
+            /* Signal EOF by setting eof_pending and waking waiters */
+            tty->eof_pending = true;
+            tty_wake_waiters(tty);
+            return;
+        } else {
+            /* Partial line flush without newline */
+            for (size_t i = 0; i < tty->line_len; i++) {
+                if (tty->in_count < TTY_BUFFER_SIZE) {
+                    tty->in_buf[tty->in_tail] = tty->line_buf[i];
+                    tty->in_tail = (tty->in_tail + 1) % TTY_BUFFER_SIZE;
+                    tty->in_count++;
+                }
+            }
+            tty->line_len = 0;
             tty_wake_waiters(tty);
             return;
         }
@@ -121,7 +134,7 @@ void tty_handle_key(char c) {
         if (tty->line_len > 0) {
             tty->line_len--;
             if (tty->flags & TTY_FLAG_ECHO) {
-                vga_putchar('\b');
+                vga_print("\b \b");
             }
         }
         return;
@@ -187,9 +200,26 @@ int64_t tty_read(tty_t *tty, void *buf, size_t count) {
 
     process_t *curr = process_get_current();
 
+    /* Prevent background processes from stealing terminal input */
+    if (curr && tty->foreground_pgrp > 0 && curr->pgrp != tty->foreground_pgrp) {
+        signal_send(curr, SIGTSTP);
+        return -SYS_ERR_EINTR;
+    }
+
+    /* Check for immediate EOF */
+    if (tty->in_count == 0 && tty->eof_pending) {
+        tty->eof_pending = false;
+        return 0;
+    }
+
     /* Sleep if no input available */
     while (tty->in_count == 0) {
         if (!curr) return 0;
+
+        if (tty->eof_pending) {
+            tty->eof_pending = false;
+            return 0;
+        }
 
         if (curr->pending_signals & ~curr->blocked_signals) {
             return -SYS_ERR_EINTR;
@@ -201,12 +231,17 @@ int64_t tty_read(tty_t *tty, void *buf, size_t count) {
         scheduler_request_reschedule();
 
         /* Wait until woken by tty_wake_waiters or signal */
-        while (curr->state == PROCESS_SLEEPING && tty->in_count == 0) {
+        while (curr->state == PROCESS_SLEEPING && tty->in_count == 0 && !tty->eof_pending) {
             __asm__ volatile ("sti; hlt");
         }
 
         tty->waiters = NULL;
         curr->state = PROCESS_RUNNING;
+
+        if (tty->eof_pending && tty->in_count == 0) {
+            tty->eof_pending = false;
+            return 0;
+        }
 
         if (tty->in_count == 0 && (curr->pending_signals & ~curr->blocked_signals)) {
             return -SYS_ERR_EINTR;

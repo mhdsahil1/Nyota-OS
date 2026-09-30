@@ -40,6 +40,8 @@ typedef struct tty {
 
     uint32_t flags;
     uint32_t foreground_pgrp;
+    uint32_t session_id;
+    bool     eof_pending;
 
     process_t *waiters;
 } tty_t;
@@ -54,5 +56,6 @@ int64_t tty_read(tty_t *tty, void *buf, size_t count);
 int64_t tty_write(tty_t *tty, const void *buf, size_t count);
 int tty_set_foreground_pgrp(tty_t *tty, uint32_t pgrp);
 uint32_t tty_get_foreground_pgrp(tty_t *tty);
+void tty_send_signal_to_foreground(tty_t *tty, int sig);
 
 #endif /* NYOTA_DRIVERS_TTY_H */

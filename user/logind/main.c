@@ -127,16 +127,35 @@ int main(int argc, char **argv) {
 
         printf("\nWelcome to Nyota OS.\n\n");
 
+        /* Establish new session and controlling terminal */
+        setsid();
+
+        /* Set up user environment */
+        setenv("USER", urec.username, 1);
+        setenv("HOME", urec.home, 1);
+        setenv("SHELL", urec.shell, 1);
+        setenv("PATH", "/bin:/sbin", 1);
+        setenv("PWD", urec.home, 1);
+
+        /* Change working directory to user home */
+        chdir(urec.home);
+
         /* Spawn user session shell */
         char *sh_argv[] = {urec.shell, NULL};
         int child_pid = spawn(urec.shell, sh_argv);
         if (child_pid > 0) {
-            /* Pass terminal foreground process group to shell */
+            /* Configure shell process group and give terminal foreground */
+            setpgid(child_pid, child_pid);
             tty_ctrl(TTY_CTRL_SET_PGRP, child_pid);
 
+            /* Track session process until termination */
             int status = 0;
             waitpid(child_pid, &status);
             printf("\n[logind] Session ended (status %d).\n", status);
+
+            /* Session cleanup: reclaim controlling TTY and restore daemon cwd */
+            tty_ctrl(TTY_CTRL_SET_PGRP, getpid());
+            chdir("/");
         } else {
             printf("[logind] Failed to execute %s\n", urec.shell);
             sleep(1000);

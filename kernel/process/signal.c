@@ -31,16 +31,17 @@ int signal_send(process_t *target, int sig) {
     }
 
     if (sig == SIGCONT) {
-        target->pending_signals &= ~(1 << SIGSTOP);
-        if (target->state == PROCESS_SLEEPING) {
-            scheduler_wake(target);
+        target->pending_signals &= ~((1 << SIGSTOP) | (1 << SIGTSTP));
+        if (target->state == PROCESS_STOPPED || target->state == PROCESS_SLEEPING) {
+            target->state = PROCESS_READY;
+            scheduler_add(target);
         }
     }
 
     target->pending_signals |= (1 << sig);
 
     /* Wake target if sleeping in interruptible wait */
-    if (target->state == PROCESS_SLEEPING && sig != SIGSTOP) {
+    if (target->state == PROCESS_SLEEPING && sig != SIGSTOP && sig != SIGTSTP) {
         scheduler_wake(target);
     }
 
@@ -51,6 +52,18 @@ int signal_send_pid(uint32_t pid, int sig) {
     process_t *target = process_find(pid);
     if (!target) return -SYS_ERR_ESRCH;
     return signal_send(target, sig);
+}
+
+extern process_t *process_table[PROCESS_MAX_COUNT];
+
+void signal_send_pgrp(uint32_t pgrp, int sig) {
+    if (pgrp == 0 || sig < 1 || sig >= NSIG) return;
+    for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
+        process_t *p = process_table[i];
+        if (p && p->pgrp == pgrp && p->state != PROCESS_TERMINATED && p->state != PROCESS_ZOMBIE) {
+            signal_send(p, sig);
+        }
+    }
 }
 
 void signal_check_and_deliver(interrupt_frame_t *frame) {
@@ -78,11 +91,26 @@ void signal_check_and_deliver(interrupt_frame_t *frame) {
                 return;
             }
 
-            if (sig == SIGSTOP) {
-                curr->state = PROCESS_SLEEPING;
-                scheduler_remove(curr);
-                scheduler_request_reschedule();
-                return;
+            if (sig == SIGSTOP || sig == SIGTSTP) {
+                signal_handler_t handler = (signal_handler_t)curr->signal_handlers[sig];
+                if (handler == SIG_IGN) continue;
+                if (handler != SIG_DFL) {
+                    uint64_t *sp = (uint64_t *)frame->rsp;
+                    sp -= 1;
+                    sp[0] = frame->rip;
+                    frame->rsp = (uint64_t)sp;
+                    frame->rip = (uint64_t)handler;
+                    frame->rdi = (uint64_t)sig;
+                    return;
+                } else {
+                    curr->state = PROCESS_STOPPED;
+                    scheduler_remove(curr);
+                    if (curr->parent) {
+                        signal_send(curr->parent, SIGCHLD);
+                    }
+                    scheduler_request_reschedule();
+                    return;
+                }
             }
 
             signal_handler_t handler = (signal_handler_t)curr->signal_handlers[sig];

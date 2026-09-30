@@ -26,10 +26,14 @@ typedef enum {
     PROCESS_READY,
     PROCESS_RUNNING,
     PROCESS_SLEEPING,
+    PROCESS_STOPPED,
     PROCESS_ZOMBIE,
     PROCESS_TERMINATED,
     PROCESS_IDLE
 } process_state_t;
+
+#define PROCESS_ENV_MAX_VARS    32
+#define PROCESS_ENV_MAX_LEN     128
 
 /* Process Control Block (PCB) */
 typedef struct process {
@@ -75,6 +79,10 @@ typedef struct process {
 
     char cwd[128];               /* Current working directory */
     uint32_t pgrp;               /* Process group ID (for job control) */
+    uint32_t sid;                /* Session ID (for login session tracking) */
+    int controlling_tty;         /* Controlling TTY ID (-1 = none, 0..3) */
+    char env[PROCESS_ENV_MAX_VARS][PROCESS_ENV_MAX_LEN]; /* Process environment block */
+    uint32_t env_count;
     uint64_t start_time;         /* Process start time in seconds or ticks */
 
     /* Process hierarchy tree */
@@ -96,9 +104,11 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
 process_t *process_create_from_elf(const char *path, char *const argv[]);
 process_t *process_spawn_elf(const char *path, char *const argv[]);
 process_t *process_spawn_elf_redirect(const char *path, char *const argv[], int in_fd, int out_fd);
+process_t *process_spawn_elf_env(const char *path, char *const argv[], char *const envp[], int in_fd, int out_fd);
 int process_exec(process_t *proc, const char *path, char *const argv[]);
 int process_execve(process_t *proc, const char *path, char *const argv[], char *const envp[]);
 #define WNOHANG         1
+#define WUNTRACED       2
 
 int process_waitpid(int32_t pid, int *status, int options);
 
@@ -110,6 +120,7 @@ typedef struct {
     char name[32];
 } proc_info_t;
 
+extern process_t *process_table[PROCESS_MAX_COUNT];
 process_t *process_find(uint32_t pid);
 size_t process_count(void);
 void process_list(void);

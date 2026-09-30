@@ -65,9 +65,14 @@
 #define SYS_SYSINFO         52
 #define SYS_TTY_CTRL        53
 #define SYS_EXECVE          54
+#define SYS_SETPGID         55
+#define SYS_GETPGID         56
+#define SYS_SETSID          57
+#define SYS_GETSID          58
 
 /* waitpid Options */
 #define WNOHANG             1
+#define WUNTRACED           2
 
 /* Reboot Commands */
 #define REBOOT_CMD_HALT     0

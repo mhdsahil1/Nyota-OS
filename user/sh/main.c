@@ -26,62 +26,121 @@ typedef struct {
 static job_t job_table[MAX_JOBS];
 static int next_job_id = 1;
 
-static void job_add(int pid, const char *cmd) {
+static int job_add_silent(int pid, const char *cmd, job_state_t state) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (job_table[i].pid == pid) {
+            job_table[i].state = state;
+            return job_table[i].id;
+        }
+    }
     for (int i = 0; i < MAX_JOBS; i++) {
         if (job_table[i].pid == 0) {
             job_table[i].id = next_job_id++;
             job_table[i].pid = pid;
-            job_table[i].state = JOB_RUNNING;
+            job_table[i].state = state;
             strncpy(job_table[i].command, cmd, sizeof(job_table[i].command) - 1);
-            printf("[%d] %d\n", job_table[i].id, pid);
-            return;
+            return job_table[i].id;
+        }
+    }
+    return 1;
+}
+
+static void job_add(int pid, const char *cmd) {
+    int id = job_add_silent(pid, cmd, JOB_RUNNING);
+    printf("[%d] %d\n", id, pid);
+}
+
+static void reap_background_jobs(void) {
+    int status = 0;
+    int reaped = 0;
+    while ((reaped = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (job_table[i].pid == reaped) {
+                if ((status & 0xFF) == 0x7F) {
+                    job_table[i].state = JOB_STOPPED;
+                } else {
+                    job_table[i].pid = 0;
+                    job_table[i].state = JOB_TERMINATED;
+                }
+                break;
+            }
         }
     }
 }
 
 static void cmd_jobs(void) {
+    reap_background_jobs();
     bool found = false;
     for (int i = 0; i < MAX_JOBS; i++) {
         if (job_table[i].pid > 0) {
             found = true;
             const char *st = (job_table[i].state == JOB_RUNNING) ? "RUNNING" :
                              (job_table[i].state == JOB_STOPPED) ? "STOPPED" : "TERMINATED";
-            printf("[%d] %s %s\n", job_table[i].id, st, job_table[i].command);
+            printf("[%d] %s  %s\n", job_table[i].id, st, job_table[i].command);
         }
     }
     if (!found) {
-        printf("No active jobs.\n");
+        /* No active jobs */
     }
 }
 
 static void cmd_fg(const char *arg) {
-    int target_id = (arg != NULL) ? atoi(arg) : 1;
+    reap_background_jobs();
+    int target_id = (arg != NULL && arg[0] != '\0') ? atoi(arg) : -1;
+    job_t *target = NULL;
     for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_table[i].pid > 0 && (job_table[i].id == target_id || arg == NULL)) {
-            int pid = job_table[i].pid;
-            tty_ctrl(TTY_CTRL_SET_PGRP, pid);
-            kill(pid, SIGCONT);
-            int status = 0;
-            waitpid(pid, &status);
-            job_table[i].pid = 0;
-            tty_ctrl(TTY_CTRL_SET_PGRP, getpid());
-            return;
+        if (job_table[i].pid > 0) {
+            if (target_id == -1 || job_table[i].id == target_id) {
+                target = &job_table[i];
+                break;
+            }
         }
     }
-    printf("fg: no such job\n");
+    if (!target) {
+        printf("fg: no such job\n");
+        return;
+    }
+
+    printf("%s\n", target->command);
+    tty_ctrl(TTY_CTRL_SET_PGRP, target->pid);
+    if (target->state == JOB_STOPPED) {
+        kill(target->pid, SIGCONT);
+        target->state = JOB_RUNNING;
+    }
+
+    int status = 0;
+    waitpid(target->pid, &status, WUNTRACED);
+    tty_ctrl(TTY_CTRL_SET_PGRP, getpid());
+
+    if ((status & 0xFF) == 0x7F) {
+        target->state = JOB_STOPPED;
+        printf("\n[%d]+ Stopped %s\n", target->id, target->command);
+    } else {
+        target->pid = 0;
+        target->state = JOB_TERMINATED;
+    }
 }
 
 static void cmd_bg(const char *arg) {
-    int target_id = (arg != NULL) ? atoi(arg) : 1;
+    reap_background_jobs();
+    int target_id = (arg != NULL && arg[0] != '\0') ? atoi(arg) : -1;
+    job_t *target = NULL;
     for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_table[i].pid > 0 && (job_table[i].id == target_id || arg == NULL)) {
-            kill(job_table[i].pid, SIGCONT);
-            job_table[i].state = JOB_RUNNING;
-            printf("[%d] RUNNING %s\n", job_table[i].id, job_table[i].command);
-            return;
+        if (job_table[i].pid > 0) {
+            if (target_id == -1 || job_table[i].id == target_id) {
+                target = &job_table[i];
+                break;
+            }
         }
     }
-    printf("bg: no such job\n");
+    if (!target) {
+        printf("bg: no such job\n");
+        return;
+    }
+
+    kill(target->pid, SIGCONT);
+    target->state = JOB_RUNNING;
+    printf("[%d] %s &\n", target->id, target->command);
 }
 
 static void print_prompt(void) {
@@ -124,11 +183,21 @@ static void cmd_cd(const char *path) {
     if (!target || target[0] == '\0' || strcmp(target, "~") == 0) {
         target = getenv("HOME");
         if (!target) target = "/";
+    } else if (strcmp(target, "-") == 0) {
+        target = getenv("OLDPWD");
+        if (!target) target = "/";
+        printf("%s\n", target);
     }
+
+    char old_cwd[128] = {0};
+    getcwd(old_cwd, sizeof(old_cwd));
 
     if (chdir(target) != 0) {
         printf("cd: %s: No such directory\n", target);
     } else {
+        if (old_cwd[0] != '\0') {
+            setenv("OLDPWD", old_cwd, 1);
+        }
         char cwd[128];
         if (getcwd(cwd, sizeof(cwd))) {
             setenv("PWD", cwd, 1);
@@ -146,7 +215,7 @@ static void cmd_pwd(void) {
 }
 
 static void cmd_export(char *arg) {
-    if (!arg) {
+    if (!arg || arg[0] == '\0') {
         /* Print all */
         if (environ) {
             for (int i = 0; environ[i] != NULL; i++) {
@@ -162,6 +231,13 @@ static void cmd_export(char *arg) {
         const char *name = arg;
         const char *val = eq + 1;
         setenv(name, val, 1);
+    } else {
+        const char *val = getenv(arg);
+        if (val) {
+            setenv(arg, val, 1);
+        } else {
+            setenv(arg, "", 1);
+        }
     }
 }
 
@@ -232,6 +308,21 @@ static bool resolve_binary(const char *cmd, char *out_path, size_t out_max) {
         out_path[out_max - 1] = '\0';
         stat_t st;
         return (stat(out_path, &st) == 0);
+    }
+
+    /* Try relative to current working directory */
+    char cwd_buf[128];
+    if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+        size_t clen = strlen(cwd_buf);
+        if (clen > 0 && cwd_buf[clen - 1] != '/') {
+            strcat(cwd_buf, "/");
+        }
+        strncpy(out_path, cwd_buf, out_max - 1);
+        strncat(out_path, cmd, out_max - strlen(out_path) - 1);
+        stat_t st;
+        if (stat(out_path, &st) == 0) {
+            return true;
+        }
     }
 
     /* Try /bin/ */
@@ -330,13 +421,20 @@ static void cmd_run(const char *path, char **args) {
         return;
     }
 
+    setpgid(pid, pid);
+
     if (background) {
         job_add(pid, path);
     } else {
         tty_ctrl(TTY_CTRL_SET_PGRP, pid);
         int status = 0;
-        waitpid(pid, &status);
+        waitpid(pid, &status, WUNTRACED);
         tty_ctrl(TTY_CTRL_SET_PGRP, getpid());
+
+        if ((status & 0xFF) == 0x7F) {
+            int jid = job_add_silent(pid, path, JOB_STOPPED);
+            printf("\n[%d]+ Stopped %s\n", jid, path);
+        }
     }
 }
 
@@ -379,6 +477,11 @@ static void execute_pipeline(char *cmd1_str, char *cmd2_str) {
     close(pipefds[1]);
 
     if (pid1 > 0) {
+        setpgid(pid1, pid1);
+        if (pid2 > 0) {
+            setpgid(pid2, pid1);
+        }
+        tty_ctrl(TTY_CTRL_SET_PGRP, pid1);
         int st1 = 0;
         waitpid(pid1, &st1);
     }
@@ -386,11 +489,20 @@ static void execute_pipeline(char *cmd1_str, char *cmd2_str) {
         int st2 = 0;
         waitpid(pid2, &st2);
     }
+    tty_ctrl(TTY_CTRL_SET_PGRP, getpid());
+}
+
+static void sigint_handler(int sig) {
+    (void)sig;
+    printf("\n");
 }
 
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
+
+    signal(SIGINT, sigint_handler);
+    signal(SIGTSTP, SIG_IGN);
 
     /* Initialize default environment if empty */
     if (!getenv("PATH")) setenv("PATH", "/bin:/sbin", 1);
@@ -407,6 +519,7 @@ int main(int argc, char **argv) {
     char line[SH_LINE_MAX];
 
     while (1) {
+        reap_background_jobs();
         print_prompt();
 
         int len = getline(line, sizeof(line));

@@ -274,4 +274,93 @@ All automated test suites were updated to account for the Phase 9 login prompt a
 3. **`tools/test_security.py`**:
    - **Result**: **ALL 25 CHECKS PASS (100%)**.
 
+---
+
+## 7. Phase 9 Part 3: TTY, Environment, Process Groups, Sessions & Login
+
+### 7.1. Architectural Overview & Design Decisions
+
+#### A. Process Environment Block & Inheritance
+- **Problem**: Child processes in earlier phases had no way to receive or pass environment variables. `getenv()` and `setenv()` operated only on ad-hoc userspace memory that was lost upon `spawn` or `exec`.
+- **Decision**: Added `char env[PROCESS_ENV_MAX_VARS][PROCESS_ENV_MAX_LEN]` and `uint32_t env_count` directly to `process_t`. Extended `SYS_SPAWN2` and `process_execve()` to accept an array of environment variable strings. Children automatically inherit parent environment blocks on spawn unless an explicit `envp` is provided. `setup_user_stack()` places `envp` pointers and strings onto the user stack following System V AMD64 ABI specifications.
+
+#### B. Current Working Directory & Path Normalization
+- **Problem**: File system paths were required to be absolute. Relative paths such as `cd ..`, `cd dir`, or relative script executions failed.
+- **Decision**: Added `char cwd[128]` to `process_t`. Implemented `vfs_normalize_path()` in `kernel/fs/vfs.c`, which resolves relative paths against the process's `cwd`, evaluates `.` (current directory) and `..` (parent directory), and normalizes redundant slashes into a canonical path.
+
+#### C. TTY Line Discipline & Canonical Mode
+- **Problem**: Keystrokes were passed raw to readers without line editing, character erase, or terminal signal delivery.
+- **Decision**: Enhanced `kernel/drivers/tty.c`:
+  - **Line Discipline Buffer**: Stores up to 256 characters in canonical mode (`ICANON`). Characters are buffered and only committed to the input queue when `\n` or `\r` is received.
+  - **Interactive Editing**: Backspace (`\b` or `0x7F`) erases the previous character from the line buffer and sends `\b \b` to VGA/serial.
+  - **Signal Generation (`ISIG`)**: Intercepts `Ctrl+C` (`\x03`) to broadcast `SIGINT` and `Ctrl+Z` (`\x1A`) to broadcast `SIGTSTP` to the terminal's foreground process group (`tty->foreground_pgrp`).
+  - **EOF**: `Ctrl+D` (`\x04`) flushes buffered input or returns EOF (0 bytes) if the buffer is empty.
+  - **Background Input Protection**: If a process whose `pgrp` does not match `tty->foreground_pgrp` attempts to read from the terminal, `tty_read()` delivers `SIGTTIN` and blocks the process.
+
+#### D. Process Groups, Sessions & Job Control
+- **Problem**: The system had no grouping concept for processes, preventing terminal job control, shell background execution, and session management.
+- **Decision**:
+  - Added `pgrp`, `sid`, and `controlling_tty` fields to `process_t`.
+  - Added syscalls `SYS_SETPGID` (47), `SYS_GETPGID` (48), `SYS_SETSID` (49), and `SYS_GETSID` (50).
+  - Implemented `signal_send_pgrp()` to broadcast signals to all processes in a group.
+  - Added `PROCESS_STOPPED` state and `WUNTRACED` option in `process_waitpid()` to report stopped children to the shell.
+  - Implemented `jobs`, `fg`, and `bg` builtins in `/bin/sh`. Background commands launched with `&` run in separate process groups without capturing terminal foreground control.
+
+#### E. Multi-User Authentication & Login Daemon (`/sbin/logind`)
+- **Problem**: The shell booted directly without user authentication or initialization of user-specific environment variables.
+- **Decision**: Created `/sbin/logind` service started by PID 1.
+  - Configured `/etc/passwd` containing `root`, `sahil`, and `user` accounts with UID, GID, home directory, and default shell.
+  - `logind` presents `tty0 login:`, reads username, reads password (with echo suppressed), verifies against `/etc/passwd`, creates a new session via `setsid()`, sets user credentials (`setuid`, `setgid`), populates user environment (`USER`, `HOME`, `SHELL`, `PWD`), and launches the user's shell as the foreground process group.
+
+### 7.2. Discovered Bugs & Critical Fixes
+
+1. **`strncpy()` Buffer Overflow & Unsigned Underflow (`kernel/memory/memory.c`)**:
+   - *Bug*: `strncpy()` used `while (n && (*dest++ = *src++)) { n--; }` followed by `while (n--) { *dest++ = '\0'; }`. If `*src == '\0'` terminated the first loop, `n--` in the first loop condition was skipped, leaving `n` unchanged while `dest` had already advanced. Then `while (n--)` padded `n` additional null bytes, exceeding the allocated buffer by 1 byte. When `n == 0`, `n--` underflowed `size_t` to `SIZE_MAX`, causing memory corruption that froze kernel initialization during PID 1 loading.
+   - *Fix*: Replaced with safe indexed implementation:
+     ```c
+     char *strncpy(char *dest, const char *src, size_t n) {
+         size_t i;
+         for (i = 0; i < n && src[i] != '\0'; i++) {
+             dest[i] = src[i];
+         }
+         for (; i < n; i++) {
+             dest[i] = '\0';
+         }
+         return dest;
+     }
+     ```
+
+2. **Idle Process (PID 0) Environment Inheritance Hang (`kernel/process/process.c`)**:
+   - *Bug*: At boot time, `process_get_current()` returns `idle_proc` (`pid == 0`). `process_create_from_elf_env()` evaluated `else if (curr && curr->env_count > 0)`. Because `idle_proc_storage` had uninitialized or stale bytes in `env_count`, PID 1 tried to copy corrupt environment memory and hung.
+   - *Fix*: Added `curr->pid > 0` checks before inheriting credentials, environment, or parent status:
+     ```c
+     else if (curr && curr->pid > 0 && curr->env_count > 0) { ... }
+     if (curr && curr->pid > 0) { ... } else { /* root PID 1 defaults */ }
+     ```
+
+3. **Interactive Shell SIGINT Termination (`user/sh/main.c`)**:
+   - *Bug*: When a user pressed `Ctrl+C` at an empty shell prompt or to interrupt input, `sh` received `SIGINT` with `SIG_DFL` action and terminated, closing the session.
+   - *Fix*: Added `signal(SIGINT, sigint_handler)` in `main()` to print a newline and refresh the prompt, and set `signal(SIGTSTP, SIG_IGN)` to prevent the interactive shell from stopping itself on `Ctrl+Z`.
+
+4. **Missing `SIGTSTP` Define in Userspace Library (`user/libnyota/libnyota.h`)**:
+   - *Bug*: `SIGTSTP` (20) was defined in kernel headers but missing from `libnyota.h`, preventing user applications from using standard job control signal constants.
+   - *Fix*: Added `#define SIGTSTP 20` to `libnyota.h`.
+
+### 7.3. Verification & Test Results
+- **`tools/test_phase9_part3.py`**: **19/19 Passed (100.0%)**
+  - Boot logind prompt verification (`tty0 login:`)
+  - Login authentication as `sahil`
+  - Default environment setup (`USER`, `HOME`, `SHELL`, `PATH`, `PWD`)
+  - Shell `export` builtin
+  - Shell `cd` navigation (`..`, `/`, `~`, `-`)
+  - Background process execution (`&`) and job identification (`[1] <pid>`)
+  - Job control listing (`jobs`)
+  - Process group and session visibility in `ps`
+  - TTY line discipline: Ctrl+C interruption (`SIGINT`)
+  - TTY line discipline: backspace editing
+- **`tools/test_security.py`**: **25/25 Passed (100.0%)** (Full security, isolation, ASLR, capabilities, guard pages, IPC suite)
+- **`tools/test_phase9_part1.py`**: **19/19 Passed (100.0%)** (Process lifecycle, blocking waits, zombie reaping, orphan reparenting)
+- **`tools/test_phase9_part2.py`**: **26/26 Passed (100.0%)** (Services, daemons, loggerd, ttyd, netd, logind, RTC clock, crash recovery)
+
+
 

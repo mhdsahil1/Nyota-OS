@@ -157,7 +157,7 @@ int waitpid_options(int pid, int *status, int options) {
 }
 
 int spawn2(const char *path, char *const argv[], int in_fd, int out_fd) {
-    return (int)syscall4(41, (uint64_t)path, (uint64_t)argv, (uint64_t)in_fd, (uint64_t)out_fd);
+    return (int)syscall6(41, (uint64_t)path, (uint64_t)argv, (uint64_t)in_fd, (uint64_t)out_fd, (uint64_t)environ, 0);
 }
 
 int pipe(int fds[2]) {
@@ -365,4 +365,20 @@ int tty_ctrl(int cmd, uint64_t arg) {
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
     return (int)syscall3(54, (uint64_t)path, (uint64_t)argv, (uint64_t)envp);
+}
+
+int setpgid(int pid, int pgid) {
+    return (int)syscall2(55, (uint64_t)pid, (uint64_t)pgid);
+}
+
+int getpgid(int pid) {
+    return (int)syscall1(56, (uint64_t)pid);
+}
+
+int setsid(void) {
+    return (int)syscall0(57);
+}
+
+int getsid(int pid) {
+    return (int)syscall1(58, (uint64_t)pid);
 }

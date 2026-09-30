@@ -86,6 +86,7 @@ int exec(const char *path, char *const argv[]);
 int spawn(const char *path, char *const argv[]);
 int spawn2(const char *path, char *const argv[], int in_fd, int out_fd);
 #define WNOHANG         1
+#define WUNTRACED       2
 
 int waitpid(int pid, int *status);
 int waitpid_options(int pid, int *status, int options);
@@ -132,6 +133,7 @@ int waitpid_options(int pid, int *status, int options);
 #define SIGCHLD         17
 #define SIGCONT         18
 #define SIGSTOP         19
+#define SIGTSTP         20
 
 #define SIG_DFL         ((void (*)(int))0)
 #define SIG_IGN         ((void (*)(int))1)
@@ -306,6 +308,10 @@ int     klog(int action, char *buf, size_t len);
 int     sysinfo(sysinfo_data_t *info);
 int     tty_ctrl(int cmd, uint64_t arg);
 int     execve(const char *path, char *const argv[], char *const envp[]);
+int     setpgid(int pid, int pgid);
+int     getpgid(int pid);
+int     setsid(void);
+int     getsid(int pid);
 
 /* Environment Variables */
 extern char **environ;

@@ -600,7 +600,7 @@ static int64_t sys_handle_getrandom(uint64_t buf_uptr, size_t len) {
     return kernel_getrandom((void *)buf_uptr, len, 0);
 }
 
-static int64_t sys_handle_spawn2(uint64_t path_uptr, uint64_t argv_uptr, int in_fd, int out_fd) {
+static int64_t sys_handle_spawn2(uint64_t path_uptr, uint64_t argv_uptr, int in_fd, int out_fd, uint64_t envp_uptr) {
     char kpath[256];
     if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
         return SYS_ERR_EFAULT;
@@ -620,7 +620,20 @@ static int64_t sys_handle_spawn2(uint64_t path_uptr, uint64_t argv_uptr, int in_
         }
     }
 
-    process_t *child = process_spawn_elf_redirect(kpath, kargv, in_fd, out_fd);
+    char *kenvp[32] = {0};
+    char env_bufs[32][128];
+    if (envp_uptr != 0) {
+        const char **uenvp = (const char **)envp_uptr;
+        for (int i = 0; i < 31; i++) {
+            if (!user_validate_pointer(&uenvp[i], sizeof(char *), false)) break;
+            const char *uenv = uenvp[i];
+            if (!uenv) break;
+            if (copy_string_from_user(env_bufs[i], uenv, sizeof(env_bufs[i])) < 0) break;
+            kenvp[i] = env_bufs[i];
+        }
+    }
+
+    process_t *child = process_spawn_elf_env(kpath, kargv, (envp_uptr != 0) ? kenvp : NULL, in_fd, out_fd);
     if (!child) return SYS_ERR_ENOENT;
     return (int64_t)child->pid;
 }
@@ -847,6 +860,62 @@ static int64_t sys_handle_execve(uint64_t path_uptr, uint64_t argv_uptr, uint64_
     return (ret == NYOTA_OK) ? 0 : SYS_ERR_ENOENT;
 }
 
+static int64_t sys_handle_setpgid(int pid, int pgid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    uint32_t target_pid = (pid == 0) ? curr->pid : (uint32_t)pid;
+    uint32_t target_pgid = (pgid == 0) ? target_pid : (uint32_t)pgid;
+
+    process_t *target = process_find(target_pid);
+    if (!target) return SYS_ERR_ESRCH;
+
+    if (target != curr && target->parent != curr) {
+        return SYS_ERR_EPERM;
+    }
+
+    target->pgrp = target_pgid;
+    return 0;
+}
+
+static int64_t sys_handle_getpgid(int pid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    uint32_t target_pid = (pid == 0) ? curr->pid : (uint32_t)pid;
+    process_t *target = process_find(target_pid);
+    if (!target) return SYS_ERR_ESRCH;
+
+    return (int64_t)target->pgrp;
+}
+
+static int64_t sys_handle_setsid(void) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    curr->sid = curr->pid;
+    curr->pgrp = curr->pid;
+
+    tty_t *tty = tty_get_current();
+    if (tty) {
+        tty->session_id = curr->sid;
+        tty->foreground_pgrp = curr->pgrp;
+    }
+
+    return (int64_t)curr->sid;
+}
+
+static int64_t sys_handle_getsid(int pid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    uint32_t target_pid = (pid == 0) ? curr->pid : (uint32_t)pid;
+    process_t *target = process_find(target_pid);
+    if (!target) return SYS_ERR_ESRCH;
+
+    return (int64_t)target->sid;
+}
+
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -892,7 +961,7 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_SHM_DT:    return sys_handle_shm_dt(a1);
         case SYS_SHM_CTL:   return sys_handle_shm_ctl((int)a1, (int)a2, a3);
         case SYS_GETRANDOM: return sys_handle_getrandom(a1, (size_t)a2);
-        case SYS_SPAWN2:    return sys_handle_spawn2(a1, a2, (int)a3, (int)a4);
+        case SYS_SPAWN2:    return sys_handle_spawn2(a1, a2, (int)a3, (int)a4, a5);
         case SYS_SECINFO:   return sys_handle_secinfo(a1);
         case SYS_GETPROCS:  return sys_handle_getprocs(a1, (size_t)a2);
         case SYS_TIME:          return sys_handle_time(a1);
@@ -906,6 +975,10 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_SYSINFO:       return sys_handle_sysinfo(a1);
         case SYS_TTY_CTRL:      return sys_handle_tty_ctrl((int)a1, a2);
         case SYS_EXECVE:        return sys_handle_execve(a1, a2, a3);
+        case SYS_SETPGID:       return sys_handle_setpgid((int)a1, (int)a2);
+        case SYS_GETPGID:       return sys_handle_getpgid((int)a1);
+        case SYS_SETSID:        return sys_handle_setsid();
+        case SYS_GETSID:        return sys_handle_getsid((int)a1);
         default:            return SYS_ERR_ENOSYS;
     }
 }
