@@ -386,3 +386,37 @@ int getsid(int pid) {
 int unlink(const char *path) {
     return (int)syscall1(59, (uint64_t)path);
 }
+
+int gfx_get_info(fb_info_t *info) {
+    return (int)syscall1(60, (uint64_t)info);
+}
+
+int gfx_flip(const void *buf, size_t size) {
+    return (int)syscall2(61, (uint64_t)buf, (uint64_t)size);
+}
+
+int input_poll_event(input_event_t *ev, int blocking) {
+    return (int)syscall2(62, (uint64_t)ev, (uint64_t)blocking);
+}
+
+int win_create(uint32_t width, uint32_t height, const char *title) {
+    return (int)syscall3(63, (uint64_t)width, (uint64_t)height, (uint64_t)title);
+}
+
+int win_destroy(uint32_t win_id) {
+    return (int)syscall1(64, (uint64_t)win_id);
+}
+
+int win_update(uint32_t win_id, const void *pixels, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    uint64_t packed_xy = ((uint64_t)x << 32) | (uint64_t)y;
+    uint64_t packed_wh = ((uint64_t)w << 32) | (uint64_t)h;
+    return (int)syscall4(65, (uint64_t)win_id, (uint64_t)pixels, packed_xy, packed_wh);
+}
+
+int win_get_event(uint32_t win_id, input_event_t *ev, int block) {
+    return (int)syscall3(66, (uint64_t)win_id, (uint64_t)ev, (uint64_t)block);
+}
+
+int win_server_op(uint32_t op, void *a1, void *a2, void *a3) {
+    return (int)syscall4(67, (uint64_t)op, (uint64_t)a1, (uint64_t)a2, (uint64_t)a3);
+}

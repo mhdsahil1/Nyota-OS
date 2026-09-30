@@ -528,3 +528,10 @@ All five primary regression test suites pass 100% on the final integration build
 | **`tools/test_phase9_part3.py`** | Environment variables, `cwd`, canonical TTY, Ctrl+C/Z/D, sessions, PGID, job control, `logind` | 19 | **19 / 19 PASS (100%)** |
 | **`tools/test_phase9_part4.py`** | `AF_UNIX` sockets, `/run`, PID files, `netd`, `sync()`, `reboot`, `shutdown`, core utilities | 24 | **24 / 24 PASS (100%)** |
 | **Total Combined** | **Full System Integration Milestone `v0.9.0`** | **113** | **113 / 113 PASS (100%)** |
+# Phase 10 GUI Architecture
+
+- The kernel owns framebuffer mapping and normalized PS/2 input; window policy, composition, desktop, toolkit, and applications run in Ring 3.
+- A single registered window server owns global display flips, normalized input consumption, window enumeration, backing-store reads, focus/z-order policy, and event routing. Registration is exclusive to prevent another client from taking server authority.
+- Window creation and updates remain process-owned; the kernel copies validated user pixels into private per-window backing stores. Process teardown destroys all windows owned by that PID.
+- PID 1 starts the desktop service after core system services. The existing login shell and text console remain available when display startup fails.
+- The initial display path targets QEMU VBE/Bochs 1024x768x32 linear framebuffer. The desktop currently uses a matching 32-bit mode.

@@ -37,6 +37,11 @@
 #include "time/rtc.h"
 #include "time/clock.h"
 #include "drivers/tty.h"
+#include "drivers/framebuffer.h"
+#include "drivers/gfx.h"
+#include "drivers/mouse.h"
+#include "drivers/input.h"
+#include "drivers/window.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -154,7 +159,8 @@ void kernel_main(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("Timer");
 
-    /* 8. Initialize PS/2 Keyboard Driver & Serial Interrupts */
+    /* 8. Initialize PS/2 Keyboard Driver, Input Subsystem & Serial Interrupts */
+    input_init();
     keyboard_init();
     serial_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
@@ -295,6 +301,18 @@ void kernel_main(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("TTY");
     vga_println("");
+
+    /* 17.5. Graphics, Framebuffer, Mouse & Window Subsystems (Phase 10) */
+    framebuffer_init();
+    mouse_init();
+    window_subsystem_init();
+    if (framebuffer_is_active()) {
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ] ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_println("Graphics");
+        vga_println("");
+    }
 
     /* 18. Launch First Userspace Process (/init) */
     klog_write(KLOG_LEVEL_INFO, "Launching PID 1 (/init)");

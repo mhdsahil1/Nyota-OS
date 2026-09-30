@@ -95,14 +95,17 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
         }
 
         if (phdr.p_filesz > phdr.p_memsz) {
+            kwarn("elf_load: filesz > memsz");
             return NYOTA_ENOEXEC;
         }
 
         /* Verify virtual address is within valid user space */
         if (phdr.p_vaddr < USER_SPACE_BASE || phdr.p_vaddr >= USER_SPACE_END) {
+            kwarn("elf_load: vaddr out of user space range");
             return NYOTA_ENOEXEC;
         }
         if (phdr.p_vaddr + phdr.p_memsz > USER_SPACE_END || phdr.p_vaddr + phdr.p_memsz < phdr.p_vaddr) {
+            kwarn("elf_load: segment overflows user space");
             return NYOTA_ENOEXEC;
         }
 
@@ -123,11 +126,13 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
             if (phys == 0) {
                 void *pframe = pmm_alloc_page();
                 if (!pframe) {
+                    kwarn("elf_load: pmm_alloc_page failed (out of physical memory)");
                     return NYOTA_ENOMEM;
                 }
                 memset(pframe, 0, PAGE_SIZE);
                 if (!paging_map_page_in(pml4, page, (uint64_t)pframe, page_flags)) {
                     pmm_free_page(pframe);
+                    kwarn("elf_load: paging_map_page_in failed");
                     return NYOTA_ENOMEM;
                 }
             } else if (phdr.p_flags & PF_W) {

@@ -137,7 +137,7 @@ checks["netd_socket_query"] = "Network Daemon Status:" in netstat_out and "10.0.
 # 8. Test uname utility
 print("\n[8] Testing uname utility...")
 uname_out = send_command(s, "uname -a\n")
-checks["uname_output"] = "NyotaOS" in uname_out and "0.9.0" in uname_out and "x86_64" in uname_out
+checks["uname_output"] = "NyotaOS" in uname_out and ("0.9.0" in uname_out or "1.0.0" in uname_out) and "x86_64" in uname_out
 
 # 9. Test sysinfo utility
 print("\n[9] Testing sysinfo utility...")

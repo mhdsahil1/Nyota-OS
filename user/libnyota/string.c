@@ -70,6 +70,21 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+void *memmove(void *dest, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
+    if (d < s) {
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+    } else if (d > s) {
+        for (size_t i = n; i > 0; i--) {
+            d[i - 1] = s[i - 1];
+        }
+    }
+    return dest;
+}
+
 void *memset(void *s, int c, size_t n) {
     uint8_t *p = (uint8_t *)s;
     for (size_t i = 0; i < n; i++) {
@@ -85,6 +100,17 @@ char *strchr(const char *s, int c) {
         s++;
     }
     return (c == '\0') ? (char *)s : NULL;
+}
+
+char *strrchr(const char *s, int c) {
+    if (!s) return NULL;
+    const char *last = NULL;
+    while (*s != '\0') {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    if (c == '\0') return (char *)s;
+    return (char *)last;
 }
 
 char *strcat(char *dest, const char *src) {

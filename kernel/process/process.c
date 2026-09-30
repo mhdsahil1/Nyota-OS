@@ -747,6 +747,10 @@ void process_exit(int status) {
         /* Clean up attached shared memory */
         shm_process_cleanup(curr);
 
+        /* Clean up GUI windows owned by this process */
+        extern void window_on_process_exit(uint32_t pid);
+        window_on_process_exit(curr->pid);
+
         /* Reparent orphaned children to PID 1 (init) */
         process_t *init_proc = process_find(1);
         while (curr->children) {

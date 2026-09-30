@@ -19,7 +19,7 @@
 
 KERNEL_TEMP_BUF   equ 0x10000   ; Temporary buffer in low memory
 KERNEL_TARGET_ADDR equ 0x100000  ; Final destination: 1 MB mark
-KERNEL_SECTOR_CNT equ 256       ; Read 256 sectors (128 KB kernel capacity)
+KERNEL_SECTOR_CNT equ 512       ; Read 512 sectors (256 KB kernel capacity)
 KERNEL_START_LBA  equ 5         ; LBA 5 (Sector 0=boot, Sectors 1..4=stage2)
 
 stage2_entry:
@@ -44,6 +44,9 @@ stage2_entry:
 
     ; 2. Detect BIOS physical memory map (E820)
     call detect_memory_e820
+
+    ; 2.5. Detect and initialize VESA VBE graphics mode
+    call detect_vbe
 
     ; 3. Enable A20 line
     call enable_a20
@@ -113,7 +116,7 @@ load_kernel_data:
     mov  dword [dap_packet + 8], KERNEL_START_LBA
     mov  dword [dap_packet + 12], 0
 
-    mov  cx, 4
+    mov  cx, 8
 .chunk_loop:
     push cx
     mov  si, dap_packet
@@ -312,6 +315,96 @@ detect_memory_e820:
     pop  es
     ret
 
+; ── VESA VBE Mode Detection & Setup (Hand-off at 0x6000) ──────────────────────
+detect_vbe:
+    push es
+    push di
+    push si
+    push cx
+    push bx
+    push ax
+
+    ; Clear 32 bytes at 0x6000
+    xor  ax, ax
+    mov  es, ax
+    mov  di, 0x6000
+    mov  cx, 8
+    xor  eax, eax
+    rep  stosd
+
+    ; Call VBE 0x4F01: Get Mode Info for 0x4118 (1024x768x32 LFB)
+    ; Mode info placed temporarily at 0x6200
+    mov  ax, 0x4F01
+    mov  cx, 0x4118
+    mov  di, 0x6200
+    int  0x10
+    cmp  ax, 0x004F
+    jne  .try_800
+
+    ; Verify LFB bit (bit 7 of ModeAttributes at byte 0x6200)
+    test byte [es:0x6200], 0x80
+    jz   .try_800
+
+    ; Set Mode 0x4118 with LFB (bit 14 set = 0x4118)
+    mov  ax, 0x4F02
+    mov  bx, 0x4118
+    int  0x10
+    cmp  ax, 0x004F
+    jne  .try_800
+    jmp  .vbe_save
+
+.try_800:
+    mov  ax, 0x4F01
+    mov  cx, 0x4115
+    mov  di, 0x6200
+    int  0x10
+    cmp  ax, 0x004F
+    jne  .vbe_done
+
+    test byte [es:0x6200], 0x80
+    jz   .vbe_done
+
+    mov  ax, 0x4F02
+    mov  bx, 0x4115
+    int  0x10
+    cmp  ax, 0x004F
+    jne  .vbe_done
+
+.vbe_save:
+    ; Extract mode info:
+    ; PhysBasePtr: dword at es:0x6228
+    mov  eax, [es:0x6228]
+    mov  [ds:0x6000], eax
+    mov  dword [ds:0x6004], 0
+    ; Width: word at es:0x6212
+    movzx eax, word [es:0x6212]
+    mov  [ds:0x6008], eax
+    ; Height: word at es:0x6214
+    movzx eax, word [es:0x6214]
+    mov  [ds:0x600C], eax
+    ; Pitch: word at es:0x6210
+    movzx eax, word [es:0x6210]
+    mov  [ds:0x6010], eax
+    ; Bpp: byte at es:0x6219
+    movzx eax, byte [es:0x6219]
+    mov  [ds:0x6014], eax
+    ; Format: 3 (FB_FORMAT_ARGB8888)
+    mov  dword [ds:0x6018], 3
+    ; is_valid: 1
+    mov  dword [ds:0x601C], 1
+
+    mov  si, msg_vbe_ok
+    call puts16
+
+.vbe_done:
+    pop  ax
+    pop  bx
+    pop  cx
+    pop  si
+    pop  di
+    pop  es
+    ret
+
 ; ── Page Table Setup (4-level Paging for Identity Map 0-128MB) ────────────────
 setup_paging_tables:
     ; Clear 12 KB memory from 0x1000 to 0x4000 (PML4, PDPT, PD)
@@ -397,6 +490,7 @@ msg_kernel_loaded:  db "Stage 2: Kernel loaded into memory.", 0x0D, 0x0A, 0
 msg_a20_ok:         db "Stage 2: A20 gate verified.", 0x0D, 0x0A, 0
 msg_lm_ok:          db "Stage 2: CPU Long Mode verified. Entering 64-bit...", 0x0D, 0x0A, 0
 msg_mmap_ok:        db "Stage 2: E820 memory map detected.", 0x0D, 0x0A, 0
+msg_vbe_ok:         db "Stage 2: VESA VBE mode initialized.", 0x0D, 0x0A, 0
 err_kernel_read:    db "FATAL: Kernel disk read failed! System halted.", 0x0D, 0x0A, 0
 err_a20:            db "FATAL: Failed to enable A20 line! System halted.", 0x0D, 0x0A, 0
 err_no_cpuid:       db "FATAL: CPU does not support CPUID! System halted.", 0x0D, 0x0A, 0

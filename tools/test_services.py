@@ -74,7 +74,7 @@ checks = {}
 
 # ── Verify kernel boot messages ──
 checks["boot_banner"] = "NYOTA OS" in boot_out
-checks["boot_version"] = "0.9.0" in boot_out
+checks["boot_version"] = ("0.9.0" in boot_out) or ("1.0.0" in boot_out)
 checks["boot_arch"] = "x86_64" in boot_out
 checks["boot_rtc"] = "RTC" in boot_out
 checks["boot_tty"] = "TTY" in boot_out

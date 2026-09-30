@@ -69,6 +69,8 @@ USER_CFLAGS := \
     -Wall                          \
     -Wextra                        \
     -Iuser/libnyota                \
+    -Iuser/libgui                  \
+    -Iinclude                      \
     -O2
 
 USER_LD_FLAGS := -m i386pep --image-base 0x8000000000 --section-alignment 0x1000 --file-alignment 0x1000
@@ -143,7 +145,12 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/rtc.o              \
     $(BUILD_DIR)/clock.o            \
     $(BUILD_DIR)/tty.o              \
-    $(BUILD_DIR)/logging.o
+    $(BUILD_DIR)/logging.o          \
+    $(BUILD_DIR)/mouse.o            \
+    $(BUILD_DIR)/input.o            \
+    $(BUILD_DIR)/framebuffer.o      \
+    $(BUILD_DIR)/gfx.o              \
+    $(BUILD_DIR)/window.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -189,7 +196,15 @@ USER_BINARIES := \
     fs/root/bin/memtest     \
     fs/root/bin/crash       \
     fs/root/bin/stressproc  \
-    fs/root/bin/lifecycletest
+    fs/root/bin/lifecycletest \
+    fs/root/bin/desktop     \
+    fs/root/bin/term        \
+    fs/root/bin/files       \
+    fs/root/bin/editor      \
+    fs/root/bin/sysmon      \
+    fs/root/bin/settings    \
+    fs/root/bin/about       \
+    fs/root/bin/guisec
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
@@ -255,6 +270,20 @@ $(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/l
 	@echo [LIB]   $@
 	@$(AR) rcs $@ $^
 
+LIBGUI := $(BUILD_DIR)/libgui.a
+
+$(BUILD_DIR)/gui_core.o: user/libgui/gui.c | $(BUILD_DIR)
+	@echo [BUILD] user/libgui/gui.c
+	@$(CC) $(USER_CFLAGS) -Iuser/libgui -c $< -o $@
+
+$(BUILD_DIR)/gui_widget.o: user/libgui/widget.c | $(BUILD_DIR)
+	@echo [BUILD] user/libgui/widget.c
+	@$(CC) $(USER_CFLAGS) -Iuser/libgui -c $< -o $@
+
+$(LIBGUI): $(BUILD_DIR)/gui_core.o $(BUILD_DIR)/gui_widget.o
+	@echo [LIB]   $@
+	@$(AR) rcs $@ $^
+
 # ── Userspace Programs ────────────────────────────────────────────────────────
 fs/root/init: user/init/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
 	@echo [USER]  /init
@@ -262,16 +291,16 @@ fs/root/init: user/init/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD
 	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/init.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_init.o $(LIBNYOTA)
 	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/init.pe $@
 
-fs/root/sbin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
+fs/root/sbin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) $(LIBGUI) user.ld | $(BUILD_DIR)
 	@echo [USER]  /sbin/$*
 	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_$*.o
-	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBNYOTA)
+	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBGUI) $(LIBNYOTA)
 	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/$*.pe $@
 
-fs/root/bin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) user.ld | $(BUILD_DIR)
+fs/root/bin/%: user/%/main.c $(BUILD_DIR)/crt0.o $(LIBNYOTA) $(LIBGUI) user.ld | $(BUILD_DIR)
 	@echo [USER]  /bin/$*
 	@$(CC) $(USER_CFLAGS) -c $< -o $(BUILD_DIR)/user_$*.o
-	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBNYOTA)
+	@$(LD) $(USER_LD_FLAGS) -T user.ld -o $(BUILD_DIR)/$*.pe $(BUILD_DIR)/crt0.o $(BUILD_DIR)/user_$*.o $(LIBGUI) $(LIBNYOTA)
 	@$(OBJCOPY) -O elf64-x86-64 $(BUILD_DIR)/$*.pe $@
 
 # ── Bootloader Stage 1 (MBR) ──────────────────────────────────────────────────
@@ -517,6 +546,26 @@ $(BUILD_DIR)/tty.o: kernel/drivers/tty.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/logging.o: kernel/logging.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/logging.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mouse.o: drivers/mouse.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/mouse.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/input.o: drivers/input.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/input.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/framebuffer.o: drivers/framebuffer.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/framebuffer.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gfx.o: drivers/gfx.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/gfx.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/window.o: drivers/window.c | $(BUILD_DIR)
+	@echo [BUILD] drivers/window.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────

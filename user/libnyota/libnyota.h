@@ -314,6 +314,94 @@ int     setsid(void);
 int     getsid(int pid);
 int     unlink(const char *path);
 
+/* Framebuffer Information */
+#define FB_FORMAT_RGB888    1
+#define FB_FORMAT_BGR888    2
+#define FB_FORMAT_ARGB8888  3
+#define FB_FORMAT_RGBA8888  4
+
+typedef struct {
+    uint64_t address;
+    uint64_t phys_addr;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t format;
+    uint32_t size;
+    bool     initialized;
+} fb_info_t;
+
+/* Input Events */
+typedef enum {
+    EVENT_NONE                   = 0,
+    EVENT_KEY_PRESS              = 1,
+    EVENT_KEY_RELEASE            = 2,
+    EVENT_MOUSE_MOVE             = 3,
+    EVENT_MOUSE_BUTTON_PRESS     = 4,
+    EVENT_MOUSE_BUTTON_RELEASE   = 5,
+    EVENT_WINDOW_CLOSE           = 6,
+    EVENT_WINDOW_FOCUS           = 7,
+    EVENT_WINDOW_RESIZE          = 8
+} input_event_type_t;
+
+#define MOUSE_BTN_LEFT   (1 << 0)
+#define MOUSE_BTN_RIGHT  (1 << 1)
+#define MOUSE_BTN_MIDDLE (1 << 2)
+
+typedef struct {
+    uint32_t type;
+    uint32_t keycode;
+    char     character;
+    int32_t  mouse_x;
+    int32_t  mouse_y;
+    int32_t  mouse_dx;
+    int32_t  mouse_dy;
+    uint32_t mouse_buttons;
+    uint32_t modifiers;
+    uint32_t window_id;
+    uint64_t timestamp;
+} __attribute__((packed)) input_event_t;
+
+int gfx_get_info(fb_info_t *info);
+int gfx_flip(const void *buf, size_t size);
+int input_poll_event(input_event_t *ev, int blocking);
+
+/* Window Management System Calls */
+#define WIN_TITLE_MAX           64
+#define WIN_STATE_NORMAL        0
+#define WIN_STATE_MINIMIZED     1
+#define WIN_STATE_MAXIMIZED     2
+#define WIN_STATE_CLOSED        3
+
+#define WS_OP_REGISTER          1
+#define WS_OP_GET_WINDOWS       2
+#define WS_OP_READ_PIXELS       3
+#define WS_OP_SET_WINDOW_PROP   4
+#define WS_OP_POST_EVENT        5
+
+typedef struct {
+    uint32_t id;
+    uint32_t owner_pid;
+    int32_t  x;
+    int32_t  y;
+    uint32_t width;
+    uint32_t height;
+    char     title[WIN_TITLE_MAX];
+    bool     visible;
+    bool     focused;
+    uint32_t z_order;
+    uint32_t state;
+    bool     dirty;
+    uint32_t dirty_x, dirty_y, dirty_w, dirty_h;
+} window_info_t;
+
+int win_create(uint32_t width, uint32_t height, const char *title);
+int win_destroy(uint32_t win_id);
+int win_update(uint32_t win_id, const void *pixels, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+int win_get_event(uint32_t win_id, input_event_t *ev, int block);
+int win_server_op(uint32_t op, void *a1, void *a2, void *a3);
+
 /* Environment Variables */
 extern char **environ;
 char *getenv(const char *name);
@@ -329,8 +417,10 @@ char *strncpy(char *dest, const char *src, size_t n);
 char *strcat(char *dest, const char *src);
 char *strncat(char *dest, const char *src, size_t n);
 char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
 int   atoi(const char *s);
 void *memcpy(void *dest, const void *src, size_t n);
+void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 
 /* Standard I/O Functions */
@@ -339,5 +429,6 @@ int puts(const char *s);
 int getchar(void);
 int getline(char *buf, size_t size);
 int printf(const char *format, ...);
+int snprintf(char *str, size_t size, const char *format, ...);
 
 #endif /* LIBNYOTA_H */

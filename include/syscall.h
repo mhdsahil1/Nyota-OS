@@ -70,6 +70,14 @@
 #define SYS_SETSID          57
 #define SYS_GETSID          58
 #define SYS_UNLINK          59
+#define SYS_GFX_GET_INFO    60
+#define SYS_GFX_FLIP        61
+#define SYS_INPUT_GET_EVENT 62
+#define SYS_WIN_CREATE      63
+#define SYS_WIN_DESTROY     64
+#define SYS_WIN_UPDATE      65
+#define SYS_WIN_GET_EVENT   66
+#define SYS_WIN_SERVER_OP   67
 
 /* waitpid Options */
 #define WNOHANG             1

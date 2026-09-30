@@ -117,7 +117,7 @@
 - [x] `/bin/reboot` and `/bin/shutdown` utilities coordinating through PID 1 socket
 
 ## 6. Core System Utilities
-- [x] `/bin/uname`: Displays OS name, kernel version (`0.9.0`), architecture (`x86_64`), hostname
+- [x] `/bin/uname`: Displays OS name, kernel version (`1.0.0`), architecture (`x86_64`), hostname
 - [x] `/bin/sysinfo`: Displays kernel version, architecture, CPU, memory stats, process count, uptime, filesystem, and network status
 - [x] `/bin/free`: Formatted memory display (total, used, free) from memory manager statistics
 - [x] `/bin/df`: Formatted filesystem usage (blocks, used, free) from VFS metadata
@@ -137,3 +137,13 @@
 - [x] `test_phase9_part3.py` passes 19/19 (100%)
 - [x] `test_phase9_part4.py` passes 24/24 (100%)
 
+## Phase 10: Graphical User Interface
+- [x] VBE framebuffer discovery, supervisor mapping, safe geometry checks, 32-bit mode fallback to text login
+- [x] Clipped 2D primitives, bitmap font, graphics test screen, and back-buffer display flips
+- [x] PS/2 mouse and keyboard normalized input events with bounded queues
+- [x] Private process-owned window buffers, focus/Z-order server interface, close and lifecycle cleanup
+- [x] Desktop compositor, panel, launcher, clock, cursor, Alt+Tab, and Ctrl+Alt+T terminal shortcut
+- [x] Native GUI programs and toolkit integrated into the NyotaFS image
+- [x] GUI global input/framebuffer/window-server calls restricted to the PID 1 desktop service
+- [x] `tools/test_phase10.py` passes 24/24; `tools/test_security.py` passes 25/25
+- [ ] Interactive visual/input walkthrough and 5+ application display stress validation

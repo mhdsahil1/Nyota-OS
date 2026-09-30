@@ -23,6 +23,10 @@
 #include "time/clock.h"
 #include "time/rtc.h"
 #include "drivers/tty.h"
+#include "drivers/framebuffer.h"
+#include "drivers/input.h"
+#include "drivers/window.h"
+#include "heap.h"
 #include "pmm.h"
 #include "io.h"
 #include "timer.h"
@@ -742,6 +746,210 @@ static int64_t sys_handle_unlink(uint64_t path_uptr) {
     return vfs_unlink(kpath);
 }
 
+static int64_t sys_handle_gfx_get_info(uint64_t info_uptr) {
+    if (!user_validate_pointer((void *)info_uptr, sizeof(framebuffer_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+    framebuffer_t *fb = framebuffer_get_info();
+    if (!fb || !fb->initialized) {
+        return SYS_ERR_ENODEV;
+    }
+    framebuffer_t safe_info = *fb;
+    safe_info.address = 0;
+    safe_info.phys_addr = 0; /* Geometry is public; device mapping stays privileged. */
+    if (copy_to_user((void *)info_uptr, &safe_info, sizeof(framebuffer_t)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return 0;
+}
+
+static int64_t sys_handle_gfx_flip(uint64_t buf_uptr, size_t size) {
+    process_t *curr = process_get_current();
+    if (!curr || !window_server_is(curr->pid)) return SYS_ERR_EACCES;
+    framebuffer_t *fb = framebuffer_get_info();
+    if (!fb || !fb->initialized) {
+        return SYS_ERR_ENODEV;
+    }
+    size_t packed_size = (size_t)fb->width * fb->height * sizeof(uint32_t);
+    if (size < packed_size || size > fb->size) {
+        return SYS_ERR_EINVAL;
+    }
+    if (!user_validate_pointer((const void *)buf_uptr, size, false)) {
+        return SYS_ERR_EFAULT;
+    }
+    framebuffer_flip((const void *)buf_uptr, size);
+    return 0;
+}
+
+static int64_t sys_handle_input_get_event(uint64_t ev_uptr, uint32_t blocking) {
+    process_t *curr = process_get_current();
+    if (!curr || !window_server_is(curr->pid)) return SYS_ERR_EACCES;
+    if (!user_validate_pointer((void *)ev_uptr, sizeof(input_event_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+    input_event_t k_ev;
+    bool has_ev = input_get_event(&k_ev, blocking != 0);
+    if (!has_ev) {
+        return 0;
+    }
+    if (copy_to_user((void *)ev_uptr, &k_ev, sizeof(input_event_t)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return 1;
+}
+
+static int64_t sys_handle_win_create(uint32_t width, uint32_t height, uint64_t title_uptr) {
+    char ktitle[WIN_TITLE_MAX];
+    memset(ktitle, 0, sizeof(ktitle));
+    if (title_uptr != 0) {
+        if (!user_validate_pointer((const void *)title_uptr, 1, false)) {
+            return SYS_ERR_EFAULT;
+        }
+        if (copy_string_from_user(ktitle, (const char *)title_uptr, sizeof(ktitle)) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+    } else {
+        strcpy(ktitle, "Nyota Window");
+    }
+
+    process_t *curr = process_get_current();
+    return window_create(curr ? curr->pid : 0, width, height, ktitle);
+}
+
+static int64_t sys_handle_win_destroy(uint32_t win_id) {
+    process_t *curr = process_get_current();
+    return window_destroy(win_id, curr ? curr->pid : 0);
+}
+
+static int64_t sys_handle_win_update(uint32_t win_id, uint64_t pixels_uptr, uint64_t packed_xy, uint64_t packed_wh) {
+    uint32_t x = (uint32_t)(packed_xy >> 32);
+    uint32_t y = (uint32_t)(packed_xy & 0xFFFFFFFF);
+    uint32_t w = (uint32_t)(packed_wh >> 32);
+    uint32_t h = (uint32_t)(packed_wh & 0xFFFFFFFF);
+
+    if (w == 0 || h == 0) return 0;
+
+    size_t pixel_count;
+    size_t req_bytes;
+    if (size_mul_overflow((size_t)w, (size_t)h, &pixel_count) ||
+        size_mul_overflow(pixel_count, sizeof(uint32_t), &req_bytes)) {
+        return SYS_ERR_EINVAL;
+    }
+    if (!user_validate_pointer((const void *)pixels_uptr, req_bytes, false)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    process_t *curr = process_get_current();
+    return window_update(win_id, curr ? curr->pid : 0, (const void *)pixels_uptr, x, y, w, h);
+}
+
+static int64_t sys_handle_win_get_event(uint32_t win_id, uint64_t ev_uptr, uint32_t block) {
+    if (!user_validate_pointer((void *)ev_uptr, sizeof(input_event_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    input_event_t k_ev;
+    memset(&k_ev, 0, sizeof(k_ev));
+
+    process_t *curr = process_get_current();
+    int ret = window_get_event(win_id, curr ? curr->pid : 0, &k_ev, block != 0);
+    if (ret > 0) {
+        if (copy_to_user((void *)ev_uptr, &k_ev, sizeof(input_event_t)) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+    }
+
+    return ret;
+}
+
+static int64_t sys_handle_win_server_op(uint32_t op, uint64_t a1, uint64_t a2, uint64_t a3) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    switch (op) {
+        case WS_OP_REGISTER:
+            if (curr->parent_pid != 1 || strcmp(curr->name, "desktop") != 0) {
+                return SYS_ERR_EACCES;
+            }
+            return window_server_register(curr->pid);
+        default:
+            if (!window_server_is(curr->pid)) return SYS_ERR_EACCES;
+            break;
+    }
+
+    switch (op) {
+
+        case WS_OP_GET_WINDOWS: {
+            uint32_t max_count = (uint32_t)a2;
+            if (max_count == 0 || max_count > MAX_WINDOWS) max_count = MAX_WINDOWS;
+            size_t bytes = max_count * sizeof(window_info_t);
+            if (!user_validate_pointer((void *)a1, bytes, true)) {
+                return SYS_ERR_EFAULT;
+            }
+            window_info_t *klist = (window_info_t *)kmalloc(bytes);
+            if (!klist) return SYS_ERR_ENOMEM;
+
+            int count = window_server_get_windows(klist, max_count);
+            if (count > 0) {
+                if (copy_to_user((void *)a1, klist, (size_t)count * sizeof(window_info_t)) < 0) {
+                    kfree(klist);
+                    return SYS_ERR_EFAULT;
+                }
+            }
+            kfree(klist);
+            return count;
+        }
+
+        case WS_OP_READ_PIXELS: {
+            uint32_t win_id = (uint32_t)a1;
+            size_t max_bytes = (size_t)a3;
+            if (max_bytes == 0 || max_bytes > 1024 * 768 * sizeof(uint32_t)) {
+                return SYS_ERR_EINVAL;
+            }
+            if (!user_validate_pointer((void *)a2, max_bytes, true)) {
+                return SYS_ERR_EFAULT;
+            }
+            void *kbuf = kmalloc(max_bytes);
+            if (!kbuf) return SYS_ERR_ENOMEM;
+
+            int bytes = window_server_read_pixels(win_id, kbuf, max_bytes);
+            if (bytes > 0) {
+                if (copy_to_user((void *)a2, kbuf, (size_t)bytes) < 0) {
+                    kfree(kbuf);
+                    return SYS_ERR_EFAULT;
+                }
+            }
+            kfree(kbuf);
+            return bytes;
+        }
+
+        case WS_OP_SET_WINDOW_PROP: {
+            uint32_t win_id = (uint32_t)a1;
+            int32_t x = (int32_t)(a2 >> 32);
+            int32_t y = (int32_t)(a2 & 0xFFFFFFFF);
+            uint32_t state = (uint32_t)(a3 >> 48);
+            bool focused = (bool)((a3 >> 32) & 0xFFFF);
+            uint32_t z_order = (uint32_t)(a3 & 0xFFFFFFFF);
+            return window_server_set_prop(win_id, x, y, state, focused, z_order);
+        }
+
+        case WS_OP_POST_EVENT: {
+            uint32_t win_id = (uint32_t)a1;
+            if (!user_validate_pointer((const void *)a2, sizeof(input_event_t), false)) {
+                return SYS_ERR_EFAULT;
+            }
+            input_event_t k_ev;
+            if (copy_from_user(&k_ev, (const void *)a2, sizeof(input_event_t)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return window_post_event(win_id, &k_ev);
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
 static int64_t sys_handle_reboot(int cmd) {
     process_t *curr = process_get_current();
     if (!curr || curr->uid != 0) {
@@ -807,7 +1015,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "0.9.0", 5);
+    memcpy(info.kernel_ver, "1.0.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -987,7 +1195,15 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_GETPGID:       return sys_handle_getpgid((int)a1);
         case SYS_SETSID:        return sys_handle_setsid();
         case SYS_GETSID:        return sys_handle_getsid((int)a1);
-        case SYS_UNLINK:        return sys_handle_unlink(a1);
+        case SYS_UNLINK:          return sys_handle_unlink(a1);
+        case SYS_GFX_GET_INFO:    return sys_handle_gfx_get_info(a1);
+        case SYS_GFX_FLIP:        return sys_handle_gfx_flip(a1, (size_t)a2);
+        case SYS_INPUT_GET_EVENT: return sys_handle_input_get_event(a1, (uint32_t)a2);
+        case SYS_WIN_CREATE:      return sys_handle_win_create((uint32_t)a1, (uint32_t)a2, a3);
+        case SYS_WIN_DESTROY:     return sys_handle_win_destroy((uint32_t)a1);
+        case SYS_WIN_UPDATE:      return sys_handle_win_update((uint32_t)a1, a2, a3, a4);
+        case SYS_WIN_GET_EVENT:   return sys_handle_win_get_event((uint32_t)a1, a2, (uint32_t)a3);
+        case SYS_WIN_SERVER_OP:   return sys_handle_win_server_op((uint32_t)a1, a2, a3, a4);
         default:            return SYS_ERR_ENOSYS;
     }
 }

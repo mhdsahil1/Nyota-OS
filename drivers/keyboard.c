@@ -7,6 +7,7 @@
 #include "interrupts.h"
 #include "pic.h"
 #include "io.h"
+#include "drivers/input.h"
 
 #define PS2_DATA_PORT       0x60
 #define PS2_STATUS_PORT     0x64
@@ -177,6 +178,22 @@ static void keyboard_irq_handler(interrupt_frame_t *frame) {
 
     /* Push event into circular buffer */
     ring_buffer_push(&ev);
+
+    /* Dispatch to unified input subsystem */
+    input_event_t in_ev = {
+        .type = ev.pressed ? EVENT_KEY_PRESS : EVENT_KEY_RELEASE,
+        .keycode = (uint32_t)scancode,
+        .character = ev.character,
+        .mouse_x = 0,
+        .mouse_y = 0,
+        .mouse_dx = 0,
+        .mouse_dy = 0,
+        .mouse_buttons = 0,
+        .modifiers = (ev.shift ? 1 : 0) | (ev.ctrl ? 2 : 0) | (ev.alt ? 4 : 0),
+        .window_id = 0,
+        .timestamp = 0
+    };
+    input_post_event(&in_ev);
 
     /* Dispatch to TTY subsystem */
     extern void tty_handle_key(char c);

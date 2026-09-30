@@ -12,10 +12,10 @@
 
 /* User Address Space Layout (Located in PML4[1] for total hardware isolation) */
 #define USER_SPACE_BASE         0x0000008000000000ULL  /* 512 GB mark */
-#define USER_SPACE_END          0x0000008000200000ULL  /* 2 MB region */
+#define USER_SPACE_END          0x0000008010000000ULL  /* 256 MB region */
 #define USER_CODE_BASE          0x0000008000000000ULL
-#define USER_STACK_TOP          0x0000008000104000ULL  /* 16 KiB user stack */
-#define USER_STACK_SIZE         (16 * 1024ULL)
+#define USER_STACK_TOP          0x000000800FF00000ULL  /* 64 KiB user stack near top */
+#define USER_STACK_SIZE         (64 * 1024ULL)
 
 #define PROCESS_NAME_MAX        32
 #define PROCESS_MAX_COUNT       32

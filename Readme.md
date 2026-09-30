@@ -13,9 +13,27 @@
   and operating system fundamentals.
 </p>
 
+**Nyota OS v1.0.0** is a bootable x86_64 hobby operating system with a native user-space desktop, protected Ring 3 applications, networking, and NyotaFS storage. Graphics initialization is optional; a failed display keeps the existing text login path available.
+
+## Phase 10: Graphical User Interface
+
+The bootloader selects a VBE linear framebuffer and passes its address, dimensions, pitch, depth, and format to the kernel. The kernel maps the device for supervisor access, provides clipped 2D primitives and input events, and exposes validated window and display calls. User processes own their window backing stores. The registered desktop process routes input, manages focus and stacking, draws the panel and launcher, and composites windows into a back buffer.
+
+```text
+GUI Applications -> libgui -> Window Server / Desktop Compositor
+                 -> validated window and input syscalls
+                 -> Graphics -> supervisor mapped framebuffer -> Display
+```
+
+The desktop starts from PID 1's service configuration after system services. A failed desktop process is reaped by PID 1 and does not prevent text-mode login. Available native programs are Terminal, Files, Editor, System Monitor, Settings, and About. The GUI security boundary keeps framebuffer writes, global input, and window management restricted to the registered server; applications can update and receive events only for their own windows.
+
+![Nyota OS v1.0.0 desktop running Terminal and About](assets/nyota-desktop.png)
+
+Build with `make all`, launch with `make run`, and run the GUI integration and security suites with `python tools/test_phase10.py` and `python tools/test_security.py`.
+
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-8%3A%20IPC%2C%20Security%20Hardening%20%26%20Process%20Isolation-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v0.8.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-10%3A%20GUI%20%26%20Desktop-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v1.0.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">
@@ -1044,7 +1062,7 @@ make run-serial
               NYOTA OS                  
 ========================================
 
-Kernel       : v0.8.0
+Kernel       : v1.0.0
 Architecture : x86_64
 
 [ OK ] GDT
@@ -1492,11 +1510,22 @@ Phase 8: IPC, Security Hardening & Process Isolation ◄ [COMPLETED]
    ├── Security Event Logging (security_log audit trail)
    └── Ring 3 Security Suite (/bin/secinfo, /bin/kill, /bin/ipctest, /bin/memtest, /bin/crash, /bin/stressproc)
 
-Phase 9: Advanced Userland & System Services     ◄ [NEXT]
+Phase 9: Advanced Userland & System Services     ◄ [COMPLETED]
    ├── Advanced Init Daemon & Service Manager (daemons, respawning, runlevels)
    ├── Pseudo-Terminal Subsystem (PTYs, line disciplines, termios)
    ├── Advanced Shell & Job Control (tcgetattr, foreground/background process groups)
    └── System Timekeeping & Real-Time Clock (RTC CMOS, uptime, gettimeofday)
+
+Phase 10: Graphical User Interface & Desktop Environment ◄ [IMPLEMENTED]
+   ├── VBE framebuffer handoff, validated mapping, 32-bit pixel format and software back buffer
+   ├── Clipped graphics primitives, bitmap font, and graphical initialization screen
+   ├── PS/2 keyboard and mouse normalization into bounded input events
+   ├── Process-owned window buffers with server-only global composition and input routing
+   ├── Desktop panel, launcher, clock, cursor, focus, stacking, minimize/maximize/close, Alt+Tab, Ctrl+Alt+T
+   ├── Reusable native GUI toolkit and centralized Nyota theme
+   ├── Native Terminal, Files, Editor, System Monitor, Settings, and About applications
+   ├── PID 1 desktop service startup, application window cleanup, and text-mode fallback
+   └── Release version 1.0.0; Phase 10 integration 24/24 and security regression 25/25
 ```
 
 ---

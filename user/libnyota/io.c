@@ -182,3 +182,147 @@ int printf(const char *fmt, ...) {
     va_end(args);
     return count;
 }
+
+int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
+    if (!str || size == 0) return 0;
+    if (!fmt) {
+        str[0] = '\0';
+        return 0;
+    }
+
+    size_t out = 0;
+#define EMIT_CHAR(c) do { if (out + 1 < size) { str[out] = (c); } out++; } while(0)
+
+    for (size_t i = 0; fmt[i] != '\0'; i++) {
+        if (fmt[i] == '%' && fmt[i + 1] != '\0') {
+            i++;
+
+            char pad_char = ' ';
+            if (fmt[i] == '0') {
+                pad_char = '0';
+                i++;
+            }
+
+            int width = 0;
+            while (fmt[i] >= '0' && fmt[i] <= '9') {
+                width = width * 10 + (fmt[i] - '0');
+                i++;
+            }
+
+            if (fmt[i] == 'l') {
+                i++;
+                if (fmt[i] == 'l') i++;
+            }
+
+            switch (fmt[i]) {
+                case 's': {
+                    const char *s = va_arg(args, const char *);
+                    if (!s) s = "(null)";
+                    while (*s) {
+                        EMIT_CHAR(*s++);
+                    }
+                    break;
+                }
+                case 'd':
+                case 'i': {
+                    int64_t val = va_arg(args, int);
+                    if (val < 0) {
+                        EMIT_CHAR('-');
+                        val = -val;
+                        if (width > 0) width--;
+                    }
+                    char buf[24];
+                    int bi = 0;
+                    if (val == 0) {
+                        buf[bi++] = '0';
+                    } else {
+                        while (val > 0) {
+                            buf[bi++] = (char)('0' + (val % 10));
+                            val /= 10;
+                        }
+                    }
+                    while (width > bi) {
+                        EMIT_CHAR(pad_char);
+                        width--;
+                    }
+                    for (int j = bi - 1; j >= 0; j--) {
+                        EMIT_CHAR(buf[j]);
+                    }
+                    break;
+                }
+                case 'u': {
+                    uint64_t val = va_arg(args, unsigned int);
+                    char buf[24];
+                    int bi = 0;
+                    if (val == 0) {
+                        buf[bi++] = '0';
+                    } else {
+                        while (val > 0) {
+                            buf[bi++] = (char)('0' + (val % 10));
+                            val /= 10;
+                        }
+                    }
+                    while (width > bi) {
+                        EMIT_CHAR(pad_char);
+                        width--;
+                    }
+                    for (int j = bi - 1; j >= 0; j--) {
+                        EMIT_CHAR(buf[j]);
+                    }
+                    break;
+                }
+                case 'x':
+                case 'p': {
+                    uint64_t val = va_arg(args, uint64_t);
+                    char buf[16];
+                    int bi = 0;
+                    const char *hex_digits = "0123456789abcdef";
+                    if (val == 0) {
+                        buf[bi++] = '0';
+                    } else {
+                        while (val > 0) {
+                            buf[bi++] = hex_digits[val & 0x0F];
+                            val >>= 4;
+                        }
+                    }
+                    for (int j = bi - 1; j >= 0; j--) {
+                        EMIT_CHAR(buf[j]);
+                    }
+                    break;
+                }
+                case 'c': {
+                    int c = va_arg(args, int);
+                    EMIT_CHAR((char)c);
+                    break;
+                }
+                case '%': {
+                    EMIT_CHAR('%');
+                    break;
+                }
+                default:
+                    EMIT_CHAR('%');
+                    EMIT_CHAR(fmt[i]);
+                    break;
+            }
+        } else {
+            EMIT_CHAR(fmt[i]);
+        }
+    }
+
+#undef EMIT_CHAR
+
+    if (out < size) {
+        str[out] = '\0';
+    } else {
+        str[size - 1] = '\0';
+    }
+    return (int)out;
+}
+
+int snprintf(char *str, size_t size, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int ret = vsnprintf(str, size, fmt, args);
+    va_end(args);
+    return ret;
+}
