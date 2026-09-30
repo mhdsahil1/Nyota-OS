@@ -15,6 +15,7 @@
 #include "process.h"
 #include "scheduler.h"
 #include "serial.h"
+#include "fs/vfs.h"
 
 static socket_t socket_table[SOCKET_TABLE_MAX];
 static uint16_t ephemeral_port_counter = 49152;
@@ -208,6 +209,9 @@ int socket_bind(socket_t *sock, const struct sockaddr_in *addr) {
         memcpy(sock->sun_path, un->sun_path, plen);
         sock->sun_path[plen] = '\0';
         sock->is_bound = true;
+
+        /* Create filesystem entry so socket shows in /run and stat() works */
+        vfs_create_entry(sock->sun_path, 0140666);
         return 0;
     }
 

@@ -362,5 +362,169 @@ All automated test suites were updated to account for the Phase 9 login prompt a
 - **`tools/test_phase9_part1.py`**: **19/19 Passed (100.0%)** (Process lifecycle, blocking waits, zombie reaping, orphan reparenting)
 - **`tools/test_phase9_part2.py`**: **26/26 Passed (100.0%)** (Services, daemons, loggerd, ttyd, netd, logind, RTC clock, crash recovery)
 
+---
 
+## 8. Phase 9 Part 4: Unix Sockets, Network Management, Shutdown & Final Integration
 
+### 8.1. Architectural Overview & Design Decisions
+
+#### A. Unix Domain Sockets (`AF_UNIX`) & VFS Socket Files
+- **Problem**: In Phase 8 and early Phase 9, `AF_UNIX` sockets lived only inside the kernel socket table. While clients could connect to bound paths, directory listings like `ls /run` showed an empty folder, and `stat()` on socket paths failed, conflicting with standard Unix filesystem semantics.
+- **Decision**:
+  - Implemented `vfs_create_entry()` in `kernel/fs/vfs.c`.
+  - When `socket_bind()` binds an `AF_UNIX` socket with a pathname in `sun_path`, it automatically invokes `vfs_create_entry(path, 0140666)` (`S_IFSOCK`), creating an in-memory directory entry in NyotaFS.
+  - Sockets bound to `/run/init.sock`, `/run/logger.sock`, and `/run/netd.sock` are visible to `ls /run`, userland tools, and permission checks.
+
+#### B. Runtime State Directory (`/run`) & PID Files
+- **Problem**: Daemons and supervisors needed a dedicated volatile location for sockets and PID files that is separated from persistent storage (`/var`, `/etc`).
+- **Decision**:
+  - Created `/run` directory at filesystem root.
+  - Daemons write their PID into `/run/<service>.pid` upon successful startup:
+    - `/run/loggerd.pid`
+    - `/run/netd.pid`
+    - `/run/logind.pid`
+  - Added `SYS_UNLINK` (59) syscall and userspace `unlink()` in `libnyota` to enable clean unlinking of PID files and sockets when daemons terminate or when PID 1 shuts down.
+
+#### C. Network Management Daemon (`/sbin/netd`) & Configuration
+- **Problem**: Network configuration was previously hardcoded or set ad-hoc by userspace scripts.
+- **Decision**:
+  - Created `/sbin/netd` daemon supervised by PID 1.
+  - Parses static network settings from `/etc/network.conf`:
+    - `interface=eth0`
+    - `ip=10.0.2.15`
+    - `netmask=255.255.255.0`
+    - `gateway=10.0.2.2`
+    - `dns=10.0.2.3`
+  - Creates `/run/netd.pid` and listens on `AF_UNIX` socket `/run/netd.sock`.
+  - Serves IPC queries (`status`, `ip`, `iface`) to administrative utilities such as `/bin/netstat`.
+
+#### D. Filesystem Sync (`sync()`) & Buffer Flushing
+- **Problem**: Before shutdown or reboot, dirty filesystem pages and cached block buffers must be flushed to persistent storage to prevent metadata or data corruption.
+- **Decision**:
+  - Implemented `vfs_sync()` in `kernel/fs/vfs.c`.
+  - Added `SYS_SYNC` (36) syscall in `kernel/arch/x86_64/syscall.c` with userspace wrapper `sync()` in `libnyota`.
+  - Created `/bin/sync` binary utility and built-in `sync` command in `/bin/sh`.
+  - PID 1 automatically invokes `sync()` during the shutdown sequence before hardware halt/reset.
+
+#### E. Controlled Shutdown, Reboot & PID 1 State Machine
+- **Problem**: Arbitrary processes directly executing hardware reboot or halt could leave services half-terminated, processes orphaned, and files un-synced.
+- **Decision**:
+  - **Privilege Checking**: `SYS_REBOOT` (35) validates caller privileges, requiring UID 0 or `CAP_SYS_ADMIN`.
+  - **PID 1 Shutdown Coordination**:
+    - Created three-state lifecycle in PID 1 (`/init`):
+      `INIT_RUNNING` $\rightarrow$ `INIT_SHUTTING_DOWN` $\rightarrow$ `INIT_HALTED`.
+    - `/bin/reboot` and `/bin/shutdown` send `"reboot"` or `"shutdown"` commands over the `/run/init.sock` Unix domain socket.
+    - When shutdown is triggered, PID 1 transitions to `INIT_SHUTTING_DOWN`, rejecting any new service start requests.
+    - PID 1 gracefully terminates all supervised services in reverse dependency order (`logind` $\rightarrow$ `netd` $\rightarrow$ `ttyd` $\rightarrow$ `loggerd`) by sending `SIGTERM`, waiting up to 500ms, and escalating to `SIGKILL` if necessary.
+    - Reaps all remaining child processes.
+    - Cleans up runtime state (`/run/*.pid`, `/run/*.sock`).
+    - Flushes filesystem buffers via `sync()`.
+    - Transitions to `INIT_HALTED` and invokes `reboot()`.
+
+---
+
+### 8.2. Complete Nyota OS Architecture Diagram (Phase 9 Milestone `v0.9.0`)
+
+```text
++---------------------------------------------------------------------------------------------------+
+|                                       HARDWARE LAYER                                              |
+|   x86_64 CPU (Ring 0 / Ring 3)  |  PIT / RTC (CMOS 0x70/0x71)  |  E1000 NIC  |  UART Serial  | VGA |
++---------------------------------------------------------------------------------------------------+
+                                                  |
++---------------------------------------------------------------------------------------------------+
+|                                      NYOTA OS KERNEL                                              |
+|                                                                                                   |
+|  +--------------------+  +----------------------+  +---------------------+  +------------------+  |
+|  |   Memory & Paging  |  | Process & Scheduler  |  |    IPC Subsystem    |  |     VFS Layer    |  |
+|  | - 4-Level Paging   |  | - Preemptive Round-R |  | - Anonymous Pipes   |  | - Inode cache    |  |
+|  | - Ring 0/3 Isol.   |  | - Sleep Queues       |  | - Shared Memory     |  | - Dir entries    |  |
+|  | - ASLR Foundation  |  | - waitpid(WNOHANG)   |  | - Unix Domain Sockets|  | - /dev, /etc, /run|  |
+|  | - Guard Pages      |  | - SIGCHLD / SIGPIPE  |  |   (AF_UNIX stream)  |  | - sync() flush   |  |
+|  +--------------------+  +----------------------+  +---------------------+  +------------------+  |
+|                                                                                                   |
+|  +--------------------+  +----------------------+  +---------------------+  +------------------+  |
+|  |     Networking     |  |     TTY Subsystem    |  |     Time Subsystem  |  |  Security/Caps   |  |
+|  | - Ethernet / ARP   |  | - Canonical ICANON   |  | - RTC Wall Clock    |  | - UID/GID checks |  |
+|  | - IPv4 / ICMP      |  | - Ctrl+C / Ctrl+Z    |  | - Monotonic Ticks   |  | - CAP_SYS_ADMIN  |  |
+|  | - TCP / UDP stack  |  | - Line discipline    |  | - sys_clock_gettime |  | - Guard bounds   |  |
++---------------------------------------------------------------------------------------------------+
+                                                  |
++---------------------------------------------------------------------------------------------------+
+|                                    USERSUPERVISOR: PID 1 (/init)                                  |
+|                                                                                                   |
+|  - Reads /etc/init.conf and /etc/services.conf                                                    |
+|  - Dependency Ordering: filesystem -> loggerd -> ttyd -> netd -> logind                           |
+|  - Crash loop protection (capped at 5 restarts)                                                   |
+|  - Reaps zombie/orphaned children via waitpid(-1, WNOHANG)                                        |
+|  - Listens on /run/init.sock for service control & shutdown commands                              |
+|  - State Machine: INIT_RUNNING -> INIT_SHUTTING_DOWN -> INIT_HALTED                              |
++---------------------------------------------------------------------------------------------------+
+           |                     |                     |                     |
+           v                     v                     v                     v
+   +---------------+     +---------------+     +---------------+     +---------------+
+   | /sbin/loggerd |     |  /sbin/ttyd   |     |  /sbin/netd   |     | /sbin/logind  |
+   | - System logs |     | - TTY driver  |     | - Net config  |     | - /etc/passwd |
+   | - Log rotation|     | - Session TTY |     | - /run/netd.pid|    | - Login prompt|
+   | - /run/logger.pid   | - Line disc.  |     | - /run/netd.sock    | - Sets session|
+   | - /run/logger.sock  +---------------+     +---------------+     | - /run/logind.pid
+   +---------------+                                                 +---------------+
+           |                                                                 |
+           |                                                                 v
+           |                                                        +-----------------+
+           |                                                        |   /bin/sh       |
+           |                                                        | (Login Shell)   |
+           |                                                        +-----------------+
+           |                                                                 |
+           +--------------------+---------------------+                      |
+                                |                     |                      |
+                                v                     v                      v
+                        +---------------+     +---------------+      +----------------+
+                        |  /bin/logger  |     |  /bin/service |      | Job Control    |
+                        | (IPC Logging) |     | (Daemon Ctrl) |      | - jobs, fg, bg |
+                        +---------------+     +---------------+      | - Background & |
+                                                                     | - Env: $VAR    |
+                                                                     +----------------+
+                                                                             |
+                                                      +----------------------+--------------------+
+                                                      |                                           |
+                                                      v                                           v
+                                              +---------------+                           +---------------+
+                                              | Core Utilities|                           | System Admin  |
+                                              | - uname       |                           | - reboot      |
+                                              | - sysinfo     |                           | - shutdown    |
+                                              | - free, df    |                           | - sync        |
+                                              | - date, uptime|                           | - kill        |
+                                              | - ps, hostname|                           | - ifconfig    |
+                                              +---------------+                           +---------------+
+```
+
+---
+
+### 8.3. Discovered Bugs & Critical Fixes
+
+1. **`AF_UNIX` Socket File Visibility in VFS (`kernel/net/socket.c` & `kernel/fs/vfs.c`)**:
+   - *Bug*: When a daemon bound an `AF_UNIX` socket to `/run/init.sock`, `/run/logger.sock`, or `/run/netd.sock`, the socket entry was recorded in the kernel socket table, but no corresponding directory entry was created in the NyotaFS VFS inode tree. Consequently, `ls /run` showed an empty directory, and tools expecting socket files could not detect their presence.
+   - *Fix*: Created `vfs_create_entry()` in `kernel/fs/vfs.c` and integrated it into `socket_bind()` in `kernel/net/socket.c` whenever `domain == AF_UNIX` and `sun_path[0] == '/'`. The socket path now appears in directory listings with file type `S_IFSOCK` (0140000).
+
+2. **PID 1 Shutdown Socket Initialization Ordering (`user/init/main.c`)**:
+   - *Bug*: `/init` previously bound `/run/init.sock` *after* starting all supervised services. If `/bin/reboot` or `/bin/service` was invoked during the startup phase or if a service start hung, the IPC socket was not yet ready, causing client utilities to fail with `connection refused`.
+   - *Fix*: Moved the creation and binding of `/run/init.sock` to the very beginning of `/init` before parsing `/etc/init.conf` and spawning background services, ensuring immediate IPC availability.
+
+3. **Stale PID and Socket File Cleanup (`user/init/main.c` & `kernel/arch/x86_64/syscall.c`)**:
+   - *Bug*: The kernel did not expose a `SYS_UNLINK` syscall, preventing daemons or PID 1 from deleting old PID files (`/run/netd.pid`, `/run/loggerd.pid`) or stale socket nodes between boots or after service stops.
+   - *Fix*: Added `SYS_UNLINK` (59) mapped to `vfs_unlink()`, added `unlink()` in `libnyota`, and integrated cleanup routines in PID 1's `shutdown_system()` function.
+
+---
+
+### 8.4. Final Regression Suite Results
+
+All five primary regression test suites pass 100% on the final integration build:
+
+| Test Suite | Subsystem Coverage | Checks | Result |
+| :--- | :--- | :---: | :---: |
+| **`tools/test_security.py`** | Memory isolation, guard pages, ASLR, pointer validation, caps, limits, pipes, shm, crash recovery | 25 | **25 / 25 PASS (100%)** |
+| **`tools/test_phase9_part1.py`** | `waitpid(WNOHANG)`, `SIGCHLD`, zombies, orphan reparenting, PID 1, blocking TTY/pipes | 19 | **19 / 19 PASS (100%)** |
+| **`tools/test_phase9_part2.py`** | Service supervisor, states, restart policies, crash loop protection, `loggerd`, RTC, uptime | 26 | **26 / 26 PASS (100%)** |
+| **`tools/test_phase9_part3.py`** | Environment variables, `cwd`, canonical TTY, Ctrl+C/Z/D, sessions, PGID, job control, `logind` | 19 | **19 / 19 PASS (100%)** |
+| **`tools/test_phase9_part4.py`** | `AF_UNIX` sockets, `/run`, PID files, `netd`, `sync()`, `reboot`, `shutdown`, core utilities | 24 | **24 / 24 PASS (100%)** |
+| **Total Combined** | **Full System Integration Milestone `v0.9.0`** | **113** | **113 / 113 PASS (100%)** |

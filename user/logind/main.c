@@ -93,6 +93,22 @@ int main(int argc, char **argv) {
 
     printf("[logind] Starting session login daemon (PID %d)\n", getpid());
 
+    /* Create PID file in /run */
+    int pfd = open("/run/logind.pid", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (pfd >= 0) {
+        char pid_str[16];
+        int p = getpid();
+        int i = 0;
+        char tmp[16];
+        if (p == 0) tmp[i++] = '0';
+        else { while (p > 0) { tmp[i++] = '0' + (p % 10); p /= 10; } }
+        int pos = 0;
+        while (i > 0) pid_str[pos++] = tmp[--i];
+        pid_str[pos++] = '\n';
+        write(pfd, pid_str, pos);
+        close(pfd);
+    }
+
     while (1) {
         printf("\nNyota OS\n\n");
         printf("tty0 login: ");

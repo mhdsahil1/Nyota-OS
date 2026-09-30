@@ -168,6 +168,7 @@ USER_BINARIES := \
     fs/root/bin/sysinfo     \
     fs/root/bin/free        \
     fs/root/bin/df          \
+    fs/root/bin/sync        \
     fs/root/bin/reboot      \
     fs/root/bin/shutdown    \
     fs/root/bin/hello       \

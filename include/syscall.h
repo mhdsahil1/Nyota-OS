@@ -69,6 +69,7 @@
 #define SYS_GETPGID         56
 #define SYS_SETSID          57
 #define SYS_GETSID          58
+#define SYS_UNLINK          59
 
 /* waitpid Options */
 #define WNOHANG             1

@@ -56,7 +56,7 @@
   - Binds controlling TTY and launches login shell
   - Reaps session on shell exit and re-prompts for login
 
-## 7. Testing & Verification
+## 7. Testing & Verification (Part 3)
 - [x] `test_security.py` passes 25/25 (100%)
 - [x] `test_phase9_part1.py` passes 19/19 (100%)
 - [x] `test_phase9_part2.py` passes 26/26 (100%)
@@ -68,3 +68,72 @@
   - Sessions & process groups
   - Multi-user login & `/etc/passwd`
   - Failure recovery (foreground process crash, background exit)
+
+---
+
+# Nyota OS — Phase 9 Part 4 Implementation Checklist
+
+## 1. Unix-Domain Sockets (`AF_UNIX`) & Service IPC
+- [x] `AF_UNIX` / `AF_LOCAL` socket support with `SOCK_STREAM` in `kernel/net/socket.c`
+- [x] Filesystem-style socket addressing: `/run/init.sock`, `/run/logger.sock`, `/run/netd.sock`
+- [x] `vfs_create_entry()` upon `socket_bind()` so bound sockets are visible in VFS directories (`ls /run`, `stat`)
+- [x] Real service interaction via Unix socket:
+  - `/bin/logger` $\rightarrow$ `/run/logger.sock` $\rightarrow$ `/sbin/loggerd` $\rightarrow$ `/var/log/system.log`
+  - `/bin/service` $\rightarrow$ `/run/init.sock` $\rightarrow$ `/init` (status, list, start, stop, restart)
+  - `/bin/reboot` & `/bin/shutdown` $\rightarrow$ `/run/init.sock` $\rightarrow$ `/init` (controlled shutdown)
+  - `/bin/netstat` $\rightarrow$ `/run/netd.sock` $\rightarrow$ `/sbin/netd` (network status query)
+
+## 2. Runtime State (`/run`) & PID Files
+- [x] `/run` directory created for volatile runtime state (sockets, PID files)
+- [x] Daemon PID file creation:
+  - `/run/loggerd.pid` created by `loggerd`
+  - `/run/netd.pid` created by `netd`
+  - `/run/logind.pid` created by `logind`
+- [x] Syscall `SYS_UNLINK` (59) and userspace wrapper `unlink()` to remove stale files
+- [x] PID file and socket cleanup on service shutdown and system halt
+
+## 3. Network Management Daemon (`netd`) & Configuration
+- [x] `/sbin/netd` userland network management daemon
+- [x] Static network configuration parsing via `/etc/network.conf` (`iface`, `ip`, `netmask`, `gateway`, `dns`)
+- [x] Listens on Unix domain socket `/run/netd.sock`
+- [x] Responds to IPC queries with network status and interface telemetry
+- [x] Enhanced `/bin/netstat` to query `/run/netd.sock`
+
+## 4. Filesystem Sync (`sync()`) & Buffer Flushing
+- [x] Syscall `SYS_SYNC` (36) implemented in `kernel/arch/x86_64/syscall.c`
+- [x] `vfs_sync()` in `kernel/fs/vfs.c` flushes pending filesystem blocks
+- [x] Userspace library wrapper `sync()` in `user/libnyota/syscall.c`
+- [x] Dedicated `/bin/sync` binary utility and shell builtin `sync`
+- [x] Automatic `sync()` invocation during controlled system shutdown
+
+## 5. Controlled Shutdown, Reboot & PID 1 State Machine
+- [x] `SYS_REBOOT` (35) privilege checking (UID 0 / `CAP_SYS_ADMIN` required)
+- [x] PID 1 (`/init`) shutdown state transitions: `INIT_RUNNING` $\rightarrow$ `INIT_SHUTTING_DOWN` $\rightarrow$ `INIT_HALTED`
+- [x] New services forbidden from starting during `INIT_SHUTTING_DOWN`
+- [x] Orderly service termination in reverse dependency order (`logind` $\rightarrow$ `netd` $\rightarrow$ `ttyd` $\rightarrow$ `loggerd`)
+- [x] Session and user process termination (`SIGTERM`, wait, `SIGKILL`)
+- [x] Unlinking runtime PID files and domain sockets in `/run`
+- [x] Filesystem sync and log flushing prior to hardware reset / halt
+- [x] `/bin/reboot` and `/bin/shutdown` utilities coordinating through PID 1 socket
+
+## 6. Core System Utilities
+- [x] `/bin/uname`: Displays OS name, kernel version (`0.9.0`), architecture (`x86_64`), hostname
+- [x] `/bin/sysinfo`: Displays kernel version, architecture, CPU, memory stats, process count, uptime, filesystem, and network status
+- [x] `/bin/free`: Formatted memory display (total, used, free) from memory manager statistics
+- [x] `/bin/df`: Formatted filesystem usage (blocks, used, free) from VFS metadata
+- [x] `/bin/hostname`: Displays or sets system hostname (`/etc/hostname`)
+- [x] `/bin/kill`: Sends signals (`SIGTERM`, `SIGKILL`, etc.) with security/permission checks
+- [x] `/bin/sync`: Synchronizes cached filesystem data to storage
+
+## 7. Final Boot Sequence & Service Ordering
+- [x] Verified boot ordering: Filesystem $\rightarrow$ `loggerd` $\rightarrow$ `ttyd` $\rightarrow$ `netd` $\rightarrow$ `logind` $\rightarrow$ Login Shell
+- [x] Respects declared service dependencies in `/etc/init.conf`
+- [x] Full failure recovery: process crashes reaped by PID 1; crash loops bounded to 5 restarts; shell stable across foreground/background crashes
+
+## 8. Final Regression Testing Suite
+- [x] `test_security.py` passes 25/25 (100%)
+- [x] `test_phase9_part1.py` passes 19/19 (100%)
+- [x] `test_phase9_part2.py` passes 26/26 (100%)
+- [x] `test_phase9_part3.py` passes 19/19 (100%)
+- [x] `test_phase9_part4.py` passes 24/24 (100%)
+

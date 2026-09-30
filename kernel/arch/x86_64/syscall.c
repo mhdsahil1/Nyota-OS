@@ -734,6 +734,14 @@ static int64_t sys_handle_sync(void) {
     return vfs_sync();
 }
 
+static int64_t sys_handle_unlink(uint64_t path_uptr) {
+    char kpath[128];
+    if (copy_string_from_user(kpath, (const char *)path_uptr, sizeof(kpath)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return vfs_unlink(kpath);
+}
+
 static int64_t sys_handle_reboot(int cmd) {
     process_t *curr = process_get_current();
     if (!curr || curr->uid != 0) {
@@ -979,6 +987,7 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_GETPGID:       return sys_handle_getpgid((int)a1);
         case SYS_SETSID:        return sys_handle_setsid();
         case SYS_GETSID:        return sys_handle_getsid((int)a1);
+        case SYS_UNLINK:        return sys_handle_unlink(a1);
         default:            return SYS_ERR_ENOSYS;
     }
 }

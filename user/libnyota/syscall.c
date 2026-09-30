@@ -382,3 +382,7 @@ int setsid(void) {
 int getsid(int pid) {
     return (int)syscall1(58, (uint64_t)pid);
 }
+
+int unlink(const char *path) {
+    return (int)syscall1(59, (uint64_t)path);
+}

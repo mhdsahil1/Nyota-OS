@@ -807,3 +807,94 @@ int vfs_sync(void) {
     /* NyotaFS writes blocks synchronously to storage device */
     return NYOTA_OK;
 }
+
+int vfs_unlink(const char *path) {
+    if (!path) return NYOTA_EFAULT;
+    if (!root_mounted) return NYOTA_ENODEV;
+
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
+    /* Separate directory and filename */
+    const char *last_slash = NULL;
+    for (const char *p = use_path; *p != '\0'; p++) {
+        if (*p == '/') last_slash = p;
+    }
+
+    char parent_path[128];
+    const char *filename = NULL;
+
+    if (!last_slash) {
+        memcpy(parent_path, "/", 2);
+        filename = use_path;
+    } else if (last_slash == use_path) {
+        memcpy(parent_path, "/", 2);
+        filename = last_slash + 1;
+    } else {
+        size_t plen = last_slash - use_path;
+        if (plen >= sizeof(parent_path)) plen = sizeof(parent_path) - 1;
+        memcpy(parent_path, use_path, plen);
+        parent_path[plen] = '\0';
+        filename = last_slash + 1;
+    }
+
+    uint64_t parent_inode = 0;
+    if (nyotafs_resolve_path(&root_filesystem, parent_path, &parent_inode) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    /* Lookup target to free blocks and inode */
+    uint64_t target_inode_num = 0;
+    if (nyotafs_lookup(&root_filesystem, parent_inode, filename, &target_inode_num) == 0) {
+        nyota_inode_t target_inode;
+        if (nyotafs_read_inode(&root_filesystem, target_inode_num, &target_inode) == 0) {
+            /* Free direct data blocks */
+            for (int b = 0; b < NYOTA_INODE_DIRECT_BLOCKS; b++) {
+                if (target_inode.direct_blocks[b] != 0) {
+                    nyotafs_free_block(&root_filesystem, target_inode.direct_blocks[b]);
+                    target_inode.direct_blocks[b] = 0;
+                }
+            }
+            /* Free indirect block and its mapped blocks */
+            if (target_inode.indirect_block != 0) {
+                uint64_t ind_buf[NYOTA_BLOCK_SIZE / sizeof(uint64_t)];
+                if (nyotafs_read_block(&root_filesystem, target_inode.indirect_block, ind_buf) == 0) {
+                    for (size_t ib = 0; ib < (NYOTA_BLOCK_SIZE / sizeof(uint64_t)); ib++) {
+                        if (ind_buf[ib] != 0) {
+                            nyotafs_free_block(&root_filesystem, ind_buf[ib]);
+                        }
+                    }
+                }
+                nyotafs_free_block(&root_filesystem, target_inode.indirect_block);
+                target_inode.indirect_block = 0;
+            }
+            /* Free inode */
+            nyotafs_free_inode(&root_filesystem, target_inode_num);
+        }
+    }
+
+    if (nyotafs_delete_entry(&root_filesystem, parent_inode, filename) != 0) {
+        return NYOTA_ENOENT;
+    }
+
+    return NYOTA_OK;
+}
+
+int vfs_create_entry(const char *path, uint32_t mode) {
+    if (!path) return NYOTA_EFAULT;
+    if (!root_mounted) return NYOTA_ENODEV;
+
+    char resolved[128];
+    int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
+    const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
+    uint64_t inode = 0;
+    if (nyotafs_create_file(&root_filesystem, use_path, mode, &inode) != 0) {
+        return NYOTA_EIO;
+    }
+
+    return NYOTA_OK;
+}
+
+

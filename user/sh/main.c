@@ -585,6 +585,8 @@ int main(int argc, char **argv) {
             cmd_ls(tokens[1]);
         } else if (strcmp(cmd, "cat") == 0) {
             cmd_cat(tokens[1]);
+        } else if (strcmp(cmd, "sync") == 0) {
+            sync();
         } else {
             char bin_path[64];
             if (resolve_binary(cmd, bin_path, sizeof(bin_path))) {

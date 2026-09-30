@@ -312,6 +312,7 @@ int     setpgid(int pid, int pgid);
 int     getpgid(int pid);
 int     setsid(void);
 int     getsid(int pid);
+int     unlink(const char *path);
 
 /* Environment Variables */
 extern char **environ;

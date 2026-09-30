@@ -121,5 +121,7 @@ int vfs_normalize_path(const char *in_path, char *out_path, size_t max_len);
 int vfs_chdir(const char *path);
 int vfs_getcwd(char *buf, size_t size);
 int vfs_sync(void);
+int vfs_unlink(const char *path);
+int vfs_create_entry(const char *path, uint32_t mode);
 
 #endif /* NYOTA_FS_VFS_H */

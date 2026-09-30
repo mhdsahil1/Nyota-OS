@@ -8,6 +8,12 @@
 #define MAX_SERVICES 16
 
 typedef enum {
+    INIT_RUNNING = 0,
+    INIT_SHUTTING_DOWN,
+    INIT_HALTED
+} init_state_t;
+
+typedef enum {
     SERVICE_STOPPED = 0,
     SERVICE_STARTING,
     SERVICE_RUNNING,
@@ -38,6 +44,7 @@ typedef struct {
 static service_t services[MAX_SERVICES];
 static size_t num_services = 0;
 static int init_sock_fd = -1;
+static init_state_t system_init_state = INIT_RUNNING;
 
 static void int_to_str(int n, char *out) {
     if (n == 0) {
@@ -195,6 +202,13 @@ static void stop_service(service_t *s) {
 
     s->state = SERVICE_STOPPED;
     s->pid = 0;
+
+    char pid_path[64];
+    strcpy(pid_path, "/run/");
+    strcat(pid_path, s->name);
+    strcat(pid_path, ".pid");
+    unlink(pid_path);
+
     char stopped_msg[128];
     strcpy(stopped_msg, s->name);
     strcat(stopped_msg, " stopped");
@@ -203,6 +217,10 @@ static void stop_service(service_t *s) {
 
 static int start_service(service_t *s) {
     if (!s) return -1;
+    if (system_init_state != INIT_RUNNING) {
+        log_service_event("WARN", s->name, "cannot start service during shutdown");
+        return -1;
+    }
     if (s->state == SERVICE_RUNNING && s->pid > 0) return 0;
 
     /* Check dependency */
@@ -430,6 +448,63 @@ static void reap_children(void) {
     }
 }
 
+static void shutdown_system(int reboot_cmd) {
+    if (system_init_state != INIT_RUNNING) return;
+    system_init_state = INIT_SHUTTING_DOWN;
+
+    printf("\n[INIT] Controlled shutdown sequence initiated\n");
+    log_service_event("WARN", "init", "system shutdown initiated");
+
+    /* 1. Stop all services in reverse dependency order */
+    for (int i = (int)num_services - 1; i >= 0; i--) {
+        if (services[i].state == SERVICE_RUNNING || services[i].pid > 0) {
+            stop_service(&services[i]);
+        }
+    }
+
+    /* 2. Terminate active sessions and background processes */
+    proc_info_t procs[32];
+    int nprocs = getprocs(procs, 32);
+    if (nprocs > 0) {
+        for (int i = 0; i < nprocs; i++) {
+            if (procs[i].pid > 1) {
+                kill(procs[i].pid, SIGTERM);
+            }
+        }
+        sleep(100);
+        for (int i = 0; i < nprocs; i++) {
+            if (procs[i].pid > 1) {
+                kill(procs[i].pid, SIGKILL);
+            }
+        }
+    }
+
+    /* 3. Clean up PID files and runtime sockets */
+    unlink("/run/loggerd.pid");
+    unlink("/run/netd.pid");
+    unlink("/run/ttyd.pid");
+    unlink("/run/logind.pid");
+    unlink("/run/loggerd.sock");
+    unlink("/run/logger.sock");
+    unlink("/run/netd.sock");
+    unlink("/run/init.sock");
+
+    /* 4. Flush filesystems */
+    printf("[INIT] Syncing filesystems...\n");
+    sync();
+    printf("[ OK ] Filesystems synchronized\n");
+
+    /* 5. Transition to HALTED state and power off / reboot */
+    system_init_state = INIT_HALTED;
+    printf("[INIT] System halted.\n");
+
+    reboot(reboot_cmd);
+
+    while (1) {
+        sleep(1000);
+    }
+}
+
 static void handle_ipc_command(int client_fd) {
     reap_children();
 
@@ -441,8 +516,18 @@ static void handle_ipc_command(int client_fd) {
     }
     req[n] = '\0';
 
-    /* Parse commands: list, start <name>, stop <name>, restart <name>, status <name> */
-    if (strncmp(req, "list", 4) == 0) {
+    /* Parse commands: list, start <name>, stop <name>, restart <name>, status <name>, shutdown, reboot */
+    if (strncmp(req, "shutdown", 8) == 0) {
+        send(client_fd, "OK\n", 3, 0);
+        close(client_fd);
+        shutdown_system(REBOOT_CMD_POWEROFF);
+        return;
+    } else if (strncmp(req, "reboot", 6) == 0) {
+        send(client_fd, "OK\n", 3, 0);
+        close(client_fd);
+        shutdown_system(REBOOT_CMD_REBOOT);
+        return;
+    } else if (strncmp(req, "list", 4) == 0) {
         char resp[1024];
         resp[0] = '\0';
         strcat(resp, "SERVICE     PID     STATE       RESTARTS\n");
@@ -549,14 +634,6 @@ int main(int argc, char **argv) {
 
     load_init_config();
 
-    /* Start services sequentially in dependency order */
-    for (size_t i = 0; i < num_services; i++) {
-        start_service(&services[i]);
-        sleep(100);
-    }
-
-    printf("\n[INIT] All configured services initialized.\n");
-
     /* Create /run/init.sock for service control */
     init_sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (init_sock_fd >= 0) {
@@ -566,6 +643,14 @@ int main(int argc, char **argv) {
         bind(init_sock_fd, (struct sockaddr *)&sun, sizeof(sun));
         listen(init_sock_fd, 5);
     }
+
+    /* Start services sequentially in dependency order */
+    for (size_t i = 0; i < num_services; i++) {
+        start_service(&services[i]);
+        sleep(100);
+    }
+
+    printf("\n[INIT] All configured services initialized.\n");
 
     /* Main init supervision loop */
     while (1) {
