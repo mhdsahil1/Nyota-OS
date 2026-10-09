@@ -157,21 +157,33 @@ int ata_write_sectors(ata_device_t *dev, uint64_t lba, uint32_t count, const voi
     return 0;
 }
 
+int ata_flush(ata_device_t *dev) {
+    if (!dev || !dev->present) return -1;
+    uint64_t rflags = spinlock_acquire_irqsave(&ata_lock);
+    uint16_t io = dev->io_base;
+    uint16_t ctrl = dev->ctrl_base;
+    outb(io + ATA_REG_HDDEVSEL, dev->drive == ATA_MASTER ? 0xE0 : 0xF0);
+    ata_delay(ctrl);
+    outb(io + ATA_REG_COMMAND, dev->lba48_supported ? ATA_CMD_CACHE_FLUSH_EXT : ATA_CMD_CACHE_FLUSH);
+    int res = ata_wait_ready(io, ctrl);
+    spinlock_release_irqrestore(&ata_lock, rflags);
+    return res;
+}
+
 /* Wrappers for block_device_t interface */
-static int ata0_read_block(uint64_t sector, uint32_t count, void *buffer) {
-    return ata_read_sectors(&ata_drives[0], sector, count, buffer);
+static int ata_bdev_read(block_device_t *dev, uint64_t lba, uint32_t count, void *buffer) {
+    if (!dev || !dev->private_data) return -1;
+    return ata_read_sectors((ata_device_t *)dev->private_data, lba, count, buffer);
 }
 
-static int ata0_write_block(uint64_t sector, uint32_t count, const void *buffer) {
-    return ata_write_sectors(&ata_drives[0], sector, count, buffer);
+static int ata_bdev_write(block_device_t *dev, uint64_t lba, uint32_t count, const void *buffer) {
+    if (!dev || !dev->private_data) return -1;
+    return ata_write_sectors((ata_device_t *)dev->private_data, lba, count, buffer);
 }
 
-static int ata1_read_block(uint64_t sector, uint32_t count, void *buffer) {
-    return ata_read_sectors(&ata_drives[1], sector, count, buffer);
-}
-
-static int ata1_write_block(uint64_t sector, uint32_t count, const void *buffer) {
-    return ata_write_sectors(&ata_drives[1], sector, count, buffer);
+static int ata_bdev_flush(block_device_t *dev) {
+    if (!dev || !dev->private_data) return -1;
+    return ata_flush((ata_device_t *)dev->private_data);
 }
 
 /* Identify ATA Drive */
@@ -324,11 +336,18 @@ void ata_init(void) {
         vga_println("");
 
         /* Register block device */
-        memcpy(ata_drives[0].block_dev.name, "ata0", 5);
+        memset(&ata_drives[0].block_dev, 0, sizeof(block_device_t));
+        strncpy(ata_drives[0].block_dev.name, "ata0", BLOCK_DEV_NAME_MAX - 1);
+        strncpy(ata_drives[0].block_dev.type_str, "ATA", sizeof(ata_drives[0].block_dev.type_str) - 1);
+        strncpy(ata_drives[0].block_dev.model, ata_drives[0].model[0] ? ata_drives[0].model : "QEMU ATA", sizeof(ata_drives[0].block_dev.model) - 1);
         ata_drives[0].block_dev.sector_size = ATA_SECTOR_SIZE;
+        ata_drives[0].block_dev.capacity_sectors = ata_drives[0].sectors;
         ata_drives[0].block_dev.sector_count = ata_drives[0].sectors;
-        ata_drives[0].block_dev.read = ata0_read_block;
-        ata_drives[0].block_dev.write = ata0_write_block;
+        ata_drives[0].block_dev.read_only = false;
+        ata_drives[0].block_dev.present = true;
+        ata_drives[0].block_dev.read = ata_bdev_read;
+        ata_drives[0].block_dev.write = ata_bdev_write;
+        ata_drives[0].block_dev.flush = ata_bdev_flush;
         ata_drives[0].block_dev.private_data = &ata_drives[0];
         block_device_register(&ata_drives[0].block_dev);
     }
@@ -355,11 +374,18 @@ void ata_init(void) {
         vga_println("");
 
         /* Register block device */
-        memcpy(ata_drives[1].block_dev.name, "ata1", 5);
+        memset(&ata_drives[1].block_dev, 0, sizeof(block_device_t));
+        strncpy(ata_drives[1].block_dev.name, "ata1", BLOCK_DEV_NAME_MAX - 1);
+        strncpy(ata_drives[1].block_dev.type_str, "ATA", sizeof(ata_drives[1].block_dev.type_str) - 1);
+        strncpy(ata_drives[1].block_dev.model, ata_drives[1].model[0] ? ata_drives[1].model : "NyotaFS Disk", sizeof(ata_drives[1].block_dev.model) - 1);
         ata_drives[1].block_dev.sector_size = ATA_SECTOR_SIZE;
+        ata_drives[1].block_dev.capacity_sectors = ata_drives[1].sectors;
         ata_drives[1].block_dev.sector_count = ata_drives[1].sectors;
-        ata_drives[1].block_dev.read = ata1_read_block;
-        ata_drives[1].block_dev.write = ata1_write_block;
+        ata_drives[1].block_dev.read_only = false;
+        ata_drives[1].block_dev.present = true;
+        ata_drives[1].block_dev.read = ata_bdev_read;
+        ata_drives[1].block_dev.write = ata_bdev_write;
+        ata_drives[1].block_dev.flush = ata_bdev_flush;
         ata_drives[1].block_dev.private_data = &ata_drives[1];
         block_device_register(&ata_drives[1].block_dev);
     }

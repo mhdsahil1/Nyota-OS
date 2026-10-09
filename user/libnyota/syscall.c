@@ -432,3 +432,28 @@ int sched_getaffinity(int pid, uint64_t *mask) {
 int smp_info(smp_info_t *info) {
     return (int)syscall1(70, (uint64_t)info);
 }
+
+int pci_info(pci_info_list_t *info) {
+    return (int)syscall1(71, (uint64_t)info);
+}
+
+int blk_info(blk_info_list_t *list) {
+    return (int)syscall1(72, (uint64_t)list);
+}
+
+int blk_read(const char *dev_name, uint64_t lba, uint32_t count, void *buf) {
+    return (int)syscall4(73, (uint64_t)dev_name, lba, (uint64_t)count, (uint64_t)buf);
+}
+
+int blk_write(const char *dev_name, uint64_t lba, uint32_t count, const void *buf) {
+    return (int)syscall4(74, (uint64_t)dev_name, lba, (uint64_t)count, (uint64_t)buf);
+}
+
+int blk_flush(const char *dev_name) {
+    return (int)syscall1(75, (uint64_t)dev_name);
+}
+
+int statvfs(const char *path, statvfs_t *buf) {
+    return (int)syscall2(76, (uint64_t)path, (uint64_t)buf);
+}
+

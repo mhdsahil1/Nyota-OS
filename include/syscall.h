@@ -81,6 +81,12 @@
 #define SYS_SCHED_SETAFFINITY 68
 #define SYS_SCHED_GETAFFINITY 69
 #define SYS_SMP_INFO          70
+#define SYS_PCI_INFO          71
+#define SYS_BLK_INFO          72
+#define SYS_BLK_READ          73
+#define SYS_BLK_WRITE         74
+#define SYS_BLK_FLUSH         75
+#define SYS_STATVFS           76
 
 /* SMP Information Data Structures */
 typedef struct {
@@ -101,6 +107,35 @@ typedef struct {
     uint32_t cpu_online;
     smp_cpu_info_t cpus[32];
 } smp_info_t;
+
+/* Block Device Diagnostic Data Structures */
+typedef struct {
+    char     name[32];
+    char     type_str[16];   /* "ATA", "AHCI", "NVME", "PARTITION" */
+    char     model[48];
+    uint64_t capacity_sectors;
+    uint32_t sector_size;
+    uint32_t read_only;
+    uint32_t is_partition;
+    char     parent_name[32];
+    uint64_t partition_offset;
+} blk_info_entry_t;
+
+typedef struct {
+    uint32_t count;
+    blk_info_entry_t devices[32];
+} blk_info_list_t;
+
+/* Filesystem Statistics Structure */
+typedef struct {
+    uint64_t f_bsize;       /* Filesystem block size */
+    uint64_t f_blocks;      /* Total data blocks in filesystem */
+    uint64_t f_bfree;       /* Free blocks in filesystem */
+    uint64_t f_bavail;      /* Free blocks available to unprivileged user */
+    uint64_t f_files;       /* Total inodes */
+    uint64_t f_ffree;       /* Free inodes */
+    uint64_t f_namemax;     /* Maximum filename length */
+} statvfs_t;
 
 /* waitpid Options */
 #define WNOHANG             1
@@ -219,5 +254,11 @@ int64_t sys_secinfo(void *info);
 int64_t sys_sched_setaffinity(int32_t pid, uint64_t mask);
 int64_t sys_sched_getaffinity(int32_t pid, uint64_t *mask_out);
 int64_t sys_smp_info(smp_info_t *info);
+int64_t sys_pci_info(void *info);
+int64_t sys_blk_info(blk_info_list_t *list);
+int64_t sys_blk_read(const char *dev_name, uint64_t lba, uint32_t count, void *buf);
+int64_t sys_blk_write(const char *dev_name, uint64_t lba, uint32_t count, const void *buf);
+int64_t sys_blk_flush(const char *dev_name);
+int64_t sys_statvfs(const char *path, statvfs_t *buf);
 
 #endif /* NYOTA_SYSCALL_H */

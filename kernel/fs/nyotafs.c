@@ -5,6 +5,7 @@
  * =========================================================================== */
 
 #include "fs/nyotafs.h"
+#include "storage/cache.h"
 #include "heap.h"
 #include "memory.h"
 #include "vga.h"
@@ -15,13 +16,13 @@
 int nyotafs_read_block(nyota_fs_t *fs, uint64_t block, void *buf) {
     if (!fs || !fs->bdev || !buf) return -1;
     uint64_t sector = block * NYOTA_SECTORS_PER_BLOCK;
-    return block_device_read(fs->bdev, sector, NYOTA_SECTORS_PER_BLOCK, buf);
+    return block_cache_read(fs->bdev, sector, NYOTA_SECTORS_PER_BLOCK, buf);
 }
 
 int nyotafs_write_block(nyota_fs_t *fs, uint64_t block, const void *buf) {
     if (!fs || !fs->bdev || !buf) return -1;
     uint64_t sector = block * NYOTA_SECTORS_PER_BLOCK;
-    return block_device_write(fs->bdev, sector, NYOTA_SECTORS_PER_BLOCK, buf);
+    return block_cache_write(fs->bdev, sector, NYOTA_SECTORS_PER_BLOCK, buf);
 }
 
 /* ── Inode Table Access ───────────────────────────────────────────────────── */

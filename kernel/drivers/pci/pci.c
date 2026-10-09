@@ -9,9 +9,60 @@
 #include "kernel.h"
 #include "serial.h"
 #include "vga.h"
+#include "spinlock.h"
 
 static pci_device_t pci_device_table[PCI_MAX_DEVICES];
 static size_t pci_device_count = 0;
+static spinlock_t pci_lock = SPINLOCK_INIT;
+
+/* ── Human-Readable Device Class Descriptions ─────────────────────────────── */
+
+const char *pci_class_description(uint8_t class_code, uint8_t subclass, uint8_t prog_if) {
+    switch (class_code) {
+        case PCI_CLASS_MASS_STORAGE:
+            switch (subclass) {
+                case PCI_SUBCLASS_STORAGE_SCSI: return "SCSI storage controller";
+                case PCI_SUBCLASS_STORAGE_IDE:  return "IDE controller";
+                case PCI_SUBCLASS_STORAGE_SATA:
+                    if (prog_if == PCI_PROG_IF_SATA_AHCI) return "SATA controller (AHCI)";
+                    return "SATA controller";
+                case PCI_SUBCLASS_STORAGE_NVME:
+                    if (prog_if == PCI_PROG_IF_NVME) return "NVM Express (NVMe)";
+                    return "Non-Volatile memory controller";
+                default: return "Mass storage controller";
+            }
+        case PCI_CLASS_NETWORK:
+            switch (subclass) {
+                case 0x00: return "Ethernet controller";
+                default:   return "Network controller";
+            }
+        case PCI_CLASS_DISPLAY:
+            switch (subclass) {
+                case 0x00: return "VGA compatible controller";
+                default:   return "Display controller";
+            }
+        case PCI_CLASS_MULTIMEDIA:
+            return "Multimedia audio controller";
+        case PCI_CLASS_BRIDGE:
+            switch (subclass) {
+                case 0x00: return "Host bridge";
+                case 0x01: return "ISA bridge";
+                case 0x04: return "PCI bridge";
+                default:   return "Bridge device";
+            }
+        case PCI_CLASS_COMMUNICATION:
+            return "Communication controller";
+        case PCI_CLASS_SYSTEM:
+            return "System peripheral";
+        case PCI_CLASS_SERIAL_BUS:
+            switch (subclass) {
+                case 0x03: return "USB controller";
+                default:   return "Serial bus controller";
+            }
+        default:
+            return "PCI device";
+    }
+}
 
 /* ── Low-Level PCI Config Space Access ─────────────────────────────────────── */
 
@@ -26,13 +77,18 @@ static inline uint32_t pci_config_addr(uint8_t bus, uint8_t slot, uint8_t func, 
 }
 
 uint32_t pci_read_config_dword(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
+    uint64_t rflags = spinlock_acquire_irqsave(&pci_lock);
     outl(PCI_CONFIG_ADDRESS, pci_config_addr(bus, slot, func, offset));
-    return inl(PCI_CONFIG_DATA);
+    uint32_t val = inl(PCI_CONFIG_DATA);
+    spinlock_release_irqrestore(&pci_lock, rflags);
+    return val;
 }
 
 void pci_write_config_dword(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint32_t val) {
+    uint64_t rflags = spinlock_acquire_irqsave(&pci_lock);
     outl(PCI_CONFIG_ADDRESS, pci_config_addr(bus, slot, func, offset));
     outl(PCI_CONFIG_DATA, val);
+    spinlock_release_irqrestore(&pci_lock, rflags);
 }
 
 uint16_t pci_read_config_word(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
@@ -41,11 +97,14 @@ uint16_t pci_read_config_word(uint8_t bus, uint8_t slot, uint8_t func, uint8_t o
 }
 
 void pci_write_config_word(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint16_t val) {
-    uint32_t dword = pci_read_config_dword(bus, slot, func, offset);
+    uint64_t rflags = spinlock_acquire_irqsave(&pci_lock);
+    outl(PCI_CONFIG_ADDRESS, pci_config_addr(bus, slot, func, offset));
+    uint32_t dword = inl(PCI_CONFIG_DATA);
     uint32_t shift = (offset & 2) * 8;
     dword &= ~(0xFFFFU << shift);
     dword |= ((uint32_t)val << shift);
-    pci_write_config_dword(bus, slot, func, offset, dword);
+    outl(PCI_CONFIG_DATA, dword);
+    spinlock_release_irqrestore(&pci_lock, rflags);
 }
 
 uint8_t pci_read_config_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
@@ -54,11 +113,14 @@ uint8_t pci_read_config_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t of
 }
 
 void pci_write_config_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint8_t val) {
-    uint32_t dword = pci_read_config_dword(bus, slot, func, offset);
+    uint64_t rflags = spinlock_acquire_irqsave(&pci_lock);
+    outl(PCI_CONFIG_ADDRESS, pci_config_addr(bus, slot, func, offset));
+    uint32_t dword = inl(PCI_CONFIG_DATA);
     uint32_t shift = (offset & 3) * 8;
     dword &= ~(0xFFU << shift);
     dword |= ((uint32_t)val << shift);
-    pci_write_config_dword(bus, slot, func, offset, dword);
+    outl(PCI_CONFIG_DATA, dword);
+    spinlock_release_irqrestore(&pci_lock, rflags);
 }
 
 /* ── BAR Interrogation ─────────────────────────────────────────────────────── */
@@ -136,6 +198,9 @@ static void pci_check_function(uint8_t bus, uint8_t slot, uint8_t func) {
     dev->irq_line = pci_read_config_byte(bus, slot, func, PCI_REG_INTERRUPT_LINE);
     dev->irq_pin = pci_read_config_byte(bus, slot, func, PCI_REG_INTERRUPT_PIN);
 
+    const char *desc = pci_class_description(dev->class_code, dev->subclass, dev->prog_if);
+    strncpy(dev->description, desc, sizeof(dev->description) - 1);
+
     pci_read_bars(dev);
 
     pci_device_count++;
@@ -144,7 +209,9 @@ static void pci_check_function(uint8_t bus, uint8_t slot, uint8_t func) {
     serial_write("[PCI] ");
     serial_write_hex(dev->bus); serial_write(":");
     serial_write_hex(dev->slot); serial_write(".");
-    serial_write_dec(dev->func); serial_write(" Device [");
+    serial_write_dec(dev->func); serial_write(" ");
+    serial_write(dev->description);
+    serial_write(" [");
     serial_write_hex(dev->vendor_id); serial_write(":");
     serial_write_hex(dev->device_id); serial_write("] Class ");
     serial_write_hex(dev->class_code); serial_write(":");
@@ -223,10 +290,36 @@ pci_device_t *pci_find_class(uint8_t class_code, uint8_t subclass) {
     return NULL;
 }
 
+pci_device_t *pci_find_storage(uint8_t subclass, uint8_t prog_if) {
+    for (size_t i = 0; i < pci_device_count; i++) {
+        if (pci_device_table[i].class_code == PCI_CLASS_MASS_STORAGE &&
+            pci_device_table[i].subclass == subclass) {
+            if (prog_if == 0xFF || pci_device_table[i].prog_if == prog_if) {
+                return &pci_device_table[i];
+            }
+        }
+    }
+    return NULL;
+}
+
 void pci_enable_bus_master(pci_device_t *dev) {
     if (!dev) return;
     uint16_t cmd = pci_read_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND);
     cmd |= (PCI_CMD_BUS_MASTER | PCI_CMD_MEMORY_SPACE | PCI_CMD_IO_SPACE);
+    pci_write_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND, cmd);
+}
+
+void pci_enable_mem_space(pci_device_t *dev) {
+    if (!dev) return;
+    uint16_t cmd = pci_read_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND);
+    cmd |= PCI_CMD_MEMORY_SPACE;
+    pci_write_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND, cmd);
+}
+
+void pci_enable_io_space(pci_device_t *dev) {
+    if (!dev) return;
+    uint16_t cmd = pci_read_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND);
+    cmd |= PCI_CMD_IO_SPACE;
     pci_write_config_word(dev->bus, dev->slot, dev->func, PCI_REG_COMMAND, cmd);
 }
 

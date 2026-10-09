@@ -25,7 +25,11 @@
 #include "scheduler.h"
 #include "schedtest.h"
 #include "storage/block.h"
+#include "storage/cache.h"
+#include "storage/partition.h"
 #include "storage/ata.h"
+#include "storage/ahci.h"
+#include "storage/nvme.h"
 #include "fs/nyotafs.h"
 #include "fs/vfs.h"
 #include "elf/elf.h"
@@ -231,12 +235,25 @@ void kernel_main(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("SMP (Multicore)");
 
-    /* 13. Storage Subsystem (ATA PIO) */
-    ata_init();
+    /* 12.8. Block Cache Subsystem (Phase 12) */
+    block_cache_init();
+
+    /* 13. Hardware Discovery & PCI Enumeration (Phase 12) */
+    pci_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    vga_println("Storage");
+    vga_println("PCI Hardware");
+
+    /* 13.5. Storage Controllers (ATA PIO, AHCI SATA, NVMe) */
+    ata_init();
+    ahci_init();
+    nvme_init();
+    partition_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Storage Subsystem");
 
     /* 14. Virtual Filesystem & NyotaFS Mount */
     vfs_init();
@@ -247,9 +264,11 @@ void kernel_main(void) {
     vga_println("Mounting root filesystem");
 
     block_device_t *root_bdev = block_device_find_by_name("ata1");
-    if (!root_bdev) {
-        root_bdev = block_device_find_by_name("ata0");
-    }
+    if (!root_bdev) root_bdev = block_device_find_by_name("ata0");
+    if (!root_bdev) root_bdev = block_device_find_by_name("sda1");
+    if (!root_bdev) root_bdev = block_device_find_by_name("sda");
+    if (!root_bdev) root_bdev = block_device_find_by_name("nvme0p1");
+    if (!root_bdev) root_bdev = block_device_find_by_name("nvme0");
 
     if (root_bdev) {
         vfs_mount_root(root_bdev);
@@ -272,8 +291,7 @@ void kernel_main(void) {
     vga_println("ELF Loader");
     vga_println("");
 
-    /* 15. PCI & Network Subsystems */
-    pci_init();
+    /* 15. Network Subsystem */
     net_init();
 
     /* 16. Security & IPC Subsystems (Phase 8) */

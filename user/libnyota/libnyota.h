@@ -115,6 +115,63 @@ int sched_setaffinity(int pid, uint64_t mask);
 int sched_getaffinity(int pid, uint64_t *mask);
 int smp_info(smp_info_t *info);
 
+/* Storage & Hardware Diagnostics (Phase 12) */
+#define PCI_MAX_DEVICES 32
+
+typedef struct {
+    uint8_t  bus;
+    uint8_t  slot;
+    uint8_t  func;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint8_t  class_code;
+    uint8_t  subclass;
+    uint8_t  prog_if;
+    uint8_t  irq_line;
+    char     description[48];
+    uint64_t bar0;
+    uint64_t bar0_size;
+} pci_info_entry_t;
+
+typedef struct {
+    uint32_t count;
+    pci_info_entry_t devices[PCI_MAX_DEVICES];
+} pci_info_list_t;
+
+typedef struct {
+    char     name[32];
+    char     type_str[16];   /* "ATA", "AHCI", "NVME", "PARTITION" */
+    char     model[48];
+    uint64_t capacity_sectors;
+    uint32_t sector_size;
+    uint32_t read_only;
+    uint32_t is_partition;
+    char     parent_name[32];
+    uint64_t partition_offset;
+} blk_info_entry_t;
+
+typedef struct {
+    uint32_t count;
+    blk_info_entry_t devices[32];
+} blk_info_list_t;
+
+typedef struct {
+    uint64_t f_bsize;       /* Filesystem block size */
+    uint64_t f_blocks;      /* Total data blocks in filesystem */
+    uint64_t f_bfree;       /* Free blocks in filesystem */
+    uint64_t f_bavail;      /* Free blocks available to unprivileged user */
+    uint64_t f_files;       /* Total inodes */
+    uint64_t f_ffree;       /* Free inodes */
+    uint64_t f_namemax;     /* Maximum filename length */
+} statvfs_t;
+
+int pci_info(pci_info_list_t *info);
+int blk_info(blk_info_list_t *list);
+int blk_read(const char *dev_name, uint64_t lba, uint32_t count, void *buf);
+int blk_write(const char *dev_name, uint64_t lba, uint32_t count, const void *buf);
+int blk_flush(const char *dev_name);
+int statvfs(const char *path, statvfs_t *buf);
+
 #define _WAITPID_2(p, s) waitpid((p), (s))
 #define _WAITPID_3(p, s, o) waitpid_options((p), (s), (o))
 #define _WAITPID_GET(_1, _2, _3, NAME, ...) NAME

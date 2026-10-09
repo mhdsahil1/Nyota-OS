@@ -265,5 +265,5 @@ void gfx_draw_test_screen(void) {
     gfx_draw_text(36, 380, "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789", text_fg, transparent);
     gfx_draw_text(36, 404, "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ [NyotaOS Kernel Native Render]", sub_fg, transparent);
     gfx_draw_text(36, 428, "System ready for Userland Window Server, Compositor & Desktop Shell.", title_fg, transparent);
-    gfx_draw_text(36, 452, "Milestone Target: Nyota OS v1.1.0 (SMP)", COLOR_HEX(0xF9E2AF), transparent);
+    gfx_draw_text(36, 452, "Milestone Target: Nyota OS v1.2.0 (Modern Storage & Hardware Support)", COLOR_HEX(0xF9E2AF), transparent);
 }

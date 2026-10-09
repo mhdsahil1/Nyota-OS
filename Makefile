@@ -120,6 +120,10 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/usertest.o         \
     $(BUILD_DIR)/block.o            \
     $(BUILD_DIR)/ata.o              \
+    $(BUILD_DIR)/ahci.o             \
+    $(BUILD_DIR)/nvme.o             \
+    $(BUILD_DIR)/partition.o        \
+    $(BUILD_DIR)/cache.o            \
     $(BUILD_DIR)/nyotafs.o          \
     $(BUILD_DIR)/vfs.o              \
     $(BUILD_DIR)/elf.o              \
@@ -210,7 +214,11 @@ USER_BINARIES := \
     fs/root/bin/about       \
     fs/root/bin/guisec      \
     fs/root/bin/smp         \
-    fs/root/bin/smpstress
+    fs/root/bin/smpstress   \
+    fs/root/bin/lspci       \
+    fs/root/bin/lsblk       \
+    fs/root/bin/diskinfo    \
+    fs/root/bin/disktest
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4
@@ -457,6 +465,22 @@ $(BUILD_DIR)/block.o: kernel/storage/block.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/ata.o: kernel/storage/ata.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/storage/ata.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ahci.o: kernel/storage/ahci.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/ahci.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/nvme.o: kernel/storage/nvme.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/nvme.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/partition.o: kernel/storage/partition.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/partition.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/cache.o: kernel/storage/cache.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/storage/cache.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/nyotafs.o: kernel/fs/nyotafs.c | $(BUILD_DIR)

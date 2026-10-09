@@ -66,9 +66,9 @@ typedef struct ata_device {
     block_device_t block_dev;
 } ata_device_t;
 
-/* APIs */
 void ata_init(void);
 int ata_read_sectors(ata_device_t *dev, uint64_t lba, uint32_t count, void *buf);
 int ata_write_sectors(ata_device_t *dev, uint64_t lba, uint32_t count, const void *buf);
+int ata_flush(ata_device_t *dev);
 
 #endif /* NYOTA_STORAGE_ATA_H */

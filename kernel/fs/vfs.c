@@ -15,6 +15,7 @@
 #include "keyboard.h"
 #include "kernel.h"
 #include "drivers/tty.h"
+#include "storage/cache.h"
 
 static nyota_fs_t root_filesystem;
 static bool root_mounted = false;
@@ -804,7 +805,8 @@ int vfs_getcwd(char *buf, size_t size) {
 }
 
 int vfs_sync(void) {
-    /* NyotaFS writes blocks synchronously to storage device */
+    /* Flush dirty blocks across all cached block devices */
+    block_cache_flush(NULL);
     return NYOTA_OK;
 }
 

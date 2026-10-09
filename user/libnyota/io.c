@@ -120,8 +120,14 @@ int printf(const char *fmt, ...) {
         if (fmt[i] == '%' && fmt[i + 1] != '\0') {
             i++;
 
+            bool left_align = false;
+            if (fmt[i] == '-') {
+                left_align = true;
+                i++;
+            }
+
             char pad_char = ' ';
-            if (fmt[i] == '0') {
+            if (fmt[i] == '0' && !left_align) {
                 pad_char = '0';
                 i++;
             }
@@ -142,7 +148,14 @@ int printf(const char *fmt, ...) {
                 case 's': {
                     const char *s = va_arg(args, const char *);
                     if (!s) s = "(null)";
-                    write(STDOUT_FILENO, s, strlen(s));
+                    size_t slen = strlen(s);
+                    if (!left_align && width > (int)slen) {
+                        for (int p = 0; p < width - (int)slen; p++) putchar(' ');
+                    }
+                    write(STDOUT_FILENO, s, slen);
+                    if (left_align && width > (int)slen) {
+                        for (int p = 0; p < width - (int)slen; p++) putchar(' ');
+                    }
                     break;
                 }
                 case 'd':
@@ -200,8 +213,14 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
         if (fmt[i] == '%' && fmt[i + 1] != '\0') {
             i++;
 
+            bool left_align = false;
+            if (fmt[i] == '-') {
+                left_align = true;
+                i++;
+            }
+
             char pad_char = ' ';
-            if (fmt[i] == '0') {
+            if (fmt[i] == '0' && !left_align) {
                 pad_char = '0';
                 i++;
             }
@@ -221,8 +240,15 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                 case 's': {
                     const char *s = va_arg(args, const char *);
                     if (!s) s = "(null)";
-                    while (*s) {
-                        EMIT_CHAR(*s++);
+                    size_t slen = strlen(s);
+                    if (!left_align && width > (int)slen) {
+                        for (int p = 0; p < width - (int)slen; p++) EMIT_CHAR(' ');
+                    }
+                    for (size_t si = 0; si < slen; si++) {
+                        EMIT_CHAR(s[si]);
+                    }
+                    if (left_align && width > (int)slen) {
+                        for (int p = 0; p < width - (int)slen; p++) EMIT_CHAR(' ');
                     }
                     break;
                 }

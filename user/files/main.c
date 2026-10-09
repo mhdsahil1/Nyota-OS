@@ -185,6 +185,15 @@ int main(int argc, char **argv) {
         gui_draw_line(win, 0, FM_HEIGHT - 26, FM_WIDTH, FM_HEIGHT - 26, COLOR_PANEL_BORDER);
         gui_draw_text(win, 12, FM_HEIGHT - 20, status_msg, COLOR_TEXT_MUTED, 0);
 
+        statvfs_t st;
+        if (statvfs("/", &st) == 0 && st.f_blocks > 0) {
+            uint64_t free_mb = (st.f_bfree * st.f_bsize) / (1024 * 1024);
+            uint64_t total_mb = (st.f_blocks * st.f_bsize) / (1024 * 1024);
+            char usage_str[48];
+            snprintf(usage_str, sizeof(usage_str), "%uMB free / %uMB", (unsigned int)free_mb, (unsigned int)total_mb);
+            gui_draw_text(win, FM_WIDTH - 150, FM_HEIGHT - 20, usage_str, COLOR_ACCENT_PRIMARY, 0);
+        }
+
         gui_window_update(win);
 
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 30000000 };

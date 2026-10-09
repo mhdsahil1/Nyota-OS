@@ -13,7 +13,26 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.1.0** is a bootable x86_64 hobby operating system featuring true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, TCP/IP networking, and NyotaFS storage.
+**Nyota OS v1.2.0** is a bootable x86_64 hobby operating system featuring a modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, TCP/IP networking, and NyotaFS storage.
+
+## Phase 12: Modern Storage & Hardware Support
+
+Phase 12 introduces a robust, unified hardware and storage subsystem:
+- **Unified Block-Device Layer**: Clean `struct block_device` abstraction supporting multiple drivers (`read`, `write`, `flush`), partition forwarding, write protection, and sector boundary validation.
+- **Enhanced PCI Subsystem**: Full configuration-space access (`0xCF8`/`0xCFC`), class/subclass decoding, BAR sizing/mapping for MMIO and I/O ports, bus mastering configuration, and userland `/bin/lspci`.
+- **Preserved ATA PIO Driver**: Rock-solid primary/secondary ATA PIO operations with LBA28/LBA48 support and hardware cache flush.
+- **Native AHCI SATA Driver**: Dynamic PCI discovery, BAR5 (ABAR) validation and mapping, HBA reset, SATA port detection, Command List and Received FIS setup, and DMA read/write/flush operations.
+- **Native NVMe Driver**: PCI discovery, BAR0 mapping, Admin Submission/Completion Queues, Identify Controller/Namespace commands, I/O Queue pairs, atomic doorbell management, and DMA read/write/flush operations.
+- **Partition Discovery (MBR & GPT)**: Signature verification, boundary checks, IEEE 802.3 CRC32 checksum verification for GPT header and partition entry arrays, and automatic sub-device registration (e.g., `/dev/sda1`, `/dev/nvme0p1`).
+- **LRU Block Cache**: Bounded-memory block cache (64 KiB) with dirty block tracking, writeback on eviction, invalidation, and tight integration with NyotaFS and `vfs_sync()`.
+- **Diagnostics & Testing Tools**:
+  - `/bin/lspci`: Enumerate PCI devices, vendor/device IDs, classes, and BAR maps.
+  - `/bin/lsblk`: List block devices, types, capacities, and statuses.
+  - `/bin/diskinfo`: Detailed hardware geometry, sector layouts, and driver info.
+  - `/bin/df`: Accurate filesystem metrics via new `sys_statvfs` syscall.
+  - `/bin/disktest`: Automated, safe hardware verification suite with root disk write protection.
+
+See [docs/storage.md](docs/storage.md) and [docs/pci.md](docs/pci.md) for full architectural documentation.
 
 ## Phase 11: Symmetric Multiprocessing (SMP) & Multicore Kernel
 
@@ -48,14 +67,15 @@ The desktop starts from PID 1's service configuration after system services. A f
 ![Nyota OS desktop running Terminal and About](assets/nyota-desktop.png)
 
 Build with `make all`, launch with `make run`, and run test suites:
+- `python tools/test_storage.py` (Phase 12 Storage, AHCI, NVMe, MBR/GPT, lspci, lsblk, disktest)
 - `python tools/test_smp.py` (SMP test across `-smp 1, 2, 4, 8`)
 - `python tools/test_security.py` (Security & IPC test)
 - `python tools/test_phase10.py` (GUI & desktop test)
 - `python tools/test_network.py` (Networking test)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-11%3A%20SMP%20%26%20Multicore-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v1.1.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-12%3A%20Modern%20Storage%20%26%20Hardware-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v1.2.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">

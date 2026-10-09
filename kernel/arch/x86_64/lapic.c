@@ -113,11 +113,9 @@ void lapic_init(void) {
         phys_addr = LAPIC_DEFAULT_PHYS_BASE;
     }
 
-    /* 2. Map LAPIC physical address in page tables if not already mapped */
-    if (!lapic_base) {
-        paging_map_page(phys_addr, phys_addr, PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHE_DISABLE);
-        lapic_base = (volatile uint8_t *)phys_addr;
-    }
+    /* 2. Map LAPIC physical address in page tables */
+    paging_map_page(phys_addr, phys_addr, PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHE_DISABLE);
+    lapic_base = (volatile uint8_t *)phys_addr;
 
     /* 3. Ensure hardware Local APIC is globally enabled in MSR */
     uint64_t msr = rdmsr(IA32_APIC_BASE_MSR);

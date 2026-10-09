@@ -80,7 +80,7 @@ def run_smp_test(smp_count, port=None):
                         time.sleep(0.15)
                         s.sendall(b"sahil\n")
                         logged_in = True
-                    elif logged_in and not password_sent and b"Password:" in buf:
+                    elif logged_in and not password_sent and (b"Password:" in buf or b"word:" in buf or b"d: " in buf):
                         time.sleep(0.15)
                         s.sendall(b"\n")
                         password_sent = True
@@ -125,8 +125,8 @@ def run_smp_test(smp_count, port=None):
     # Run /bin/smp
     smp_out = send_cmd(s, "smp\n", timeout=12)
     
-    # Run /bin/smpstress
-    stress_out = send_cmd(s, "smpstress\n", timeout=25)
+    # Run /bin/smpstress (give 45s for 8-core QEMU TCG emulation)
+    stress_out = send_cmd(s, "smpstress\n", timeout=45)
 
     # Run sysinfo
     sysinfo_out = send_cmd(s, "sysinfo\n", timeout=12)

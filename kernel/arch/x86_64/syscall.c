@@ -32,6 +32,12 @@
 #include "pmm.h"
 #include "io.h"
 #include "timer.h"
+#include "drivers/pci.h"
+#include "storage/block.h"
+#include "storage/cache.h"
+#include "storage/partition.h"
+#include "storage/ahci.h"
+#include "storage/nvme.h"
 
 void ___chkstk_ms(void) {}
 
@@ -1017,7 +1023,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.1.0", 5);
+    memcpy(info.kernel_ver, "1.2.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1221,6 +1227,219 @@ static int64_t sys_handle_smp_info(uint64_t u_info_ptr) {
     return SYS_ERR_NONE;
 }
 
+static int64_t sys_handle_pci_info(uint64_t u_info_ptr) {
+    if (!user_validate_pointer((void *)u_info_ptr, sizeof(pci_info_list_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    pci_info_list_t kinfo;
+    memset(&kinfo, 0, sizeof(kinfo));
+
+    size_t total = pci_get_device_count();
+    if (total > PCI_MAX_DEVICES) total = PCI_MAX_DEVICES;
+    kinfo.count = (uint32_t)total;
+
+    for (size_t i = 0; i < total; i++) {
+        pci_device_t *dev = pci_get_device(i);
+        if (!dev) continue;
+        kinfo.devices[i].bus = dev->bus;
+        kinfo.devices[i].slot = dev->slot;
+        kinfo.devices[i].func = dev->func;
+        kinfo.devices[i].vendor_id = dev->vendor_id;
+        kinfo.devices[i].device_id = dev->device_id;
+        kinfo.devices[i].class_code = dev->class_code;
+        kinfo.devices[i].subclass = dev->subclass;
+        kinfo.devices[i].prog_if = dev->prog_if;
+        kinfo.devices[i].irq_line = dev->irq_line;
+        strncpy(kinfo.devices[i].description, dev->description, sizeof(kinfo.devices[i].description) - 1);
+        kinfo.devices[i].bar0 = dev->bar[0];
+        kinfo.devices[i].bar0_size = dev->bar_size[0];
+    }
+
+    if (copy_to_user((void *)u_info_ptr, &kinfo, sizeof(kinfo)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return SYS_ERR_NONE;
+}
+
+static int64_t sys_handle_blk_info(uint64_t u_list_ptr) {
+    if (!user_validate_pointer((void *)u_list_ptr, sizeof(blk_info_list_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    blk_info_list_t klist;
+    memset(&klist, 0, sizeof(klist));
+
+    size_t total = block_device_count();
+    if (total > 32) total = 32;
+    klist.count = (uint32_t)total;
+
+    for (size_t i = 0; i < total; i++) {
+        block_device_t *b = block_device_get((uint32_t)i);
+        if (!b) continue;
+        strncpy(klist.devices[i].name, b->name, sizeof(klist.devices[i].name) - 1);
+        strncpy(klist.devices[i].type_str, b->type_str[0] ? b->type_str : "DISK", sizeof(klist.devices[i].type_str) - 1);
+        strncpy(klist.devices[i].model, b->model[0] ? b->model : "Drive", sizeof(klist.devices[i].model) - 1);
+        klist.devices[i].capacity_sectors = b->capacity_sectors;
+        klist.devices[i].sector_size = b->sector_size;
+        klist.devices[i].read_only = b->read_only ? 1 : 0;
+        klist.devices[i].is_partition = (b->parent != NULL) ? 1 : 0;
+        if (b->parent) {
+            strncpy(klist.devices[i].parent_name, b->parent->name, sizeof(klist.devices[i].parent_name) - 1);
+            klist.devices[i].partition_offset = b->partition_offset_lba;
+        }
+    }
+
+    if (copy_to_user((void *)u_list_ptr, &klist, sizeof(klist)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return SYS_ERR_NONE;
+}
+
+static int64_t sys_handle_blk_read(uint64_t u_name, uint64_t lba, uint32_t count, uint64_t u_buf) {
+    process_t *curr = process_get_current();
+    if (!curr || curr->uid != 0) {
+        return SYS_ERR_EPERM;
+    }
+
+    char kname[32];
+    if (copy_string_from_user(kname, (const char *)u_name, sizeof(kname)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    block_device_t *bdev = block_device_find_by_name(kname);
+    if (!bdev) return SYS_ERR_ENODEV;
+
+    uint32_t sec_size = bdev->sector_size ? bdev->sector_size : 512;
+    size_t total_bytes = (size_t)count * sec_size;
+
+    if (!user_validate_pointer((void *)u_buf, total_bytes, true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    uint8_t kbuf[4096];
+    uint32_t cur_count = count;
+    uint64_t cur_lba = lba;
+    uint8_t *user_ptr = (uint8_t *)u_buf;
+
+    while (cur_count > 0) {
+        uint32_t batch = (cur_count > (sizeof(kbuf) / sec_size)) ? (sizeof(kbuf) / sec_size) : cur_count;
+        int err = block_device_read(bdev, cur_lba, batch, kbuf);
+        if (err != 0) return SYS_ERR_EIO;
+
+        if (copy_to_user(user_ptr, kbuf, batch * sec_size) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+
+        cur_lba += batch;
+        cur_count -= batch;
+        user_ptr += batch * sec_size;
+    }
+
+    return 0;
+}
+
+static int64_t sys_handle_blk_write(uint64_t u_name, uint64_t lba, uint32_t count, uint64_t u_buf) {
+    process_t *curr = process_get_current();
+    if (!curr || curr->uid != 0) {
+        return SYS_ERR_EPERM;
+    }
+
+    char kname[32];
+    if (copy_string_from_user(kname, (const char *)u_name, sizeof(kname)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    block_device_t *bdev = block_device_find_by_name(kname);
+    if (!bdev) return SYS_ERR_ENODEV;
+
+    if (bdev->read_only) return SYS_ERR_EACCES;
+
+    uint32_t sec_size = bdev->sector_size ? bdev->sector_size : 512;
+    size_t total_bytes = (size_t)count * sec_size;
+
+    if (!user_validate_pointer((const void *)u_buf, total_bytes, false)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    uint8_t kbuf[4096];
+    uint32_t cur_count = count;
+    uint64_t cur_lba = lba;
+    const uint8_t *user_ptr = (const uint8_t *)u_buf;
+
+    while (cur_count > 0) {
+        uint32_t batch = (cur_count > (sizeof(kbuf) / sec_size)) ? (sizeof(kbuf) / sec_size) : cur_count;
+        if (copy_from_user(kbuf, user_ptr, batch * sec_size) < 0) {
+            return SYS_ERR_EFAULT;
+        }
+
+        int err = block_device_write(bdev, cur_lba, batch, kbuf);
+        if (err != 0) return SYS_ERR_EIO;
+
+        cur_lba += batch;
+        cur_count -= batch;
+        user_ptr += batch * sec_size;
+    }
+
+    return 0;
+}
+
+static int64_t sys_handle_blk_flush(uint64_t u_name) {
+    process_t *curr = process_get_current();
+    if (!curr || curr->uid != 0) {
+        return SYS_ERR_EPERM;
+    }
+
+    if (u_name == 0) {
+        block_cache_flush(NULL);
+        return 0;
+    }
+
+    char kname[32];
+    if (copy_string_from_user(kname, (const char *)u_name, sizeof(kname)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    if (kname[0] == '\0' || strcmp(kname, "all") == 0) {
+        block_cache_flush(NULL);
+        return 0;
+    }
+
+    block_device_t *bdev = block_device_find_by_name(kname);
+    if (!bdev) return SYS_ERR_ENODEV;
+
+    block_device_flush(bdev);
+    return 0;
+}
+
+static int64_t sys_handle_statvfs(uint64_t u_path, uint64_t u_buf) {
+    (void)u_path;
+    if (!user_validate_pointer((void *)u_buf, sizeof(statvfs_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    nyota_fs_t *rfs = vfs_get_root_fs();
+    if (!rfs || !rfs->mounted) {
+        return SYS_ERR_ENODEV;
+    }
+
+    statvfs_t k_st;
+    memset(&k_st, 0, sizeof(k_st));
+    k_st.f_bsize = rfs->sb.block_size;
+    k_st.f_blocks = rfs->sb.total_blocks;
+    k_st.f_bfree = rfs->sb.free_blocks;
+    k_st.f_bavail = rfs->sb.free_blocks;
+    k_st.f_files = rfs->sb.total_inodes;
+    k_st.f_ffree = rfs->sb.free_inodes;
+    k_st.f_namemax = NYOTA_NAME_MAX;
+
+    if (copy_to_user((void *)u_buf, &k_st, sizeof(k_st)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+
+    return 0;
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     switch (num) {
         case SYS_WRITE:     return sys_handle_write(a1, a2, a3);
@@ -1294,6 +1513,12 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_SCHED_SETAFFINITY: return sys_handle_sched_setaffinity((int32_t)a1, a2);
         case SYS_SCHED_GETAFFINITY: return sys_handle_sched_getaffinity((int32_t)a1, a2);
         case SYS_SMP_INFO:          return sys_handle_smp_info(a1);
+        case SYS_PCI_INFO:          return sys_handle_pci_info(a1);
+        case SYS_BLK_INFO:          return sys_handle_blk_info(a1);
+        case SYS_BLK_READ:          return sys_handle_blk_read(a1, a2, (uint32_t)a3, a4);
+        case SYS_BLK_WRITE:         return sys_handle_blk_write(a1, a2, (uint32_t)a3, a4);
+        case SYS_BLK_FLUSH:         return sys_handle_blk_flush(a1);
+        case SYS_STATVFS:           return sys_handle_statvfs(a1, a2);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2025,6 +2250,97 @@ int64_t sys_smp_info(smp_info_t *info) {
         : "=r"(ret)
         : "r"((uint64_t)info)
         : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_pci_info(void *info) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $71, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)info)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_blk_info(blk_info_list_t *list) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $72, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)list)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_blk_read(const char *dev_name, uint64_t lba, uint32_t count, void *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $73, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)dev_name), "r"(lba), "r"((uint64_t)count), "r"((uint64_t)buf)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_blk_write(const char *dev_name, uint64_t lba, uint32_t count, const void *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $74, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)dev_name), "r"(lba), "r"((uint64_t)count), "r"((uint64_t)buf)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_blk_flush(const char *dev_name) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $75, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)dev_name)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_statvfs(const char *path, statvfs_t *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $76, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)path), "r"((uint64_t)buf)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
     );
     return ret;
 }
