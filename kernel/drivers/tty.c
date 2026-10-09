@@ -221,7 +221,7 @@ int64_t tty_read(tty_t *tty, void *buf, size_t count) {
             return 0;
         }
 
-        if (curr->pending_signals & ~curr->blocked_signals) {
+        if (signal_is_pending_interruptible(curr)) {
             return -SYS_ERR_EINTR;
         }
 
@@ -243,7 +243,7 @@ int64_t tty_read(tty_t *tty, void *buf, size_t count) {
             return 0;
         }
 
-        if (tty->in_count == 0 && (curr->pending_signals & ~curr->blocked_signals)) {
+        if (tty->in_count == 0 && signal_is_pending_interruptible(curr)) {
             return -SYS_ERR_EINTR;
         }
     }

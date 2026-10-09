@@ -42,6 +42,8 @@
 #include "drivers/mouse.h"
 #include "drivers/input.h"
 #include "drivers/window.h"
+#include "smp.h"
+#include "lapic.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -222,6 +224,13 @@ void kernel_main(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("Scheduler");
 
+    /* 12.5. Symmetric Multiprocessing (SMP) Initialization */
+    smp_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("SMP (Multicore)");
+
     /* 13. Storage Subsystem (ATA PIO) */
     ata_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
@@ -319,6 +328,7 @@ void kernel_main(void) {
     process_t *init_proc = process_spawn_init();
 
     /* 19. Start Scheduler & Enter Multitasking */
+    smp_set_all_ready();
     if (init_proc) {
         process_run(init_proc);
         /* Idle kernel thread while userspace is active */

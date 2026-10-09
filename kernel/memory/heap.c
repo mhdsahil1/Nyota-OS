@@ -9,7 +9,9 @@
 #include "memory.h"
 #include "kernel.h"
 #include "vga.h"
+#include "spinlock.h"
 
+static spinlock_t heap_lock = SPINLOCK_INIT;
 static uint64_t heap_start_addr = KERNEL_HEAP_START;
 static uint64_t heap_end_addr = KERNEL_HEAP_START;
 static heap_block_t *heap_head = NULL;
@@ -107,7 +109,7 @@ void heap_init(void) {
 
 /* ── kmalloc & kfree ──────────────────────────────────────────────────────── */
 
-void *kmalloc(size_t size) {
+static void *kmalloc_internal(size_t size) {
     if (size == 0) return NULL;
 
     /* Align requested size to 16 bytes */
@@ -142,14 +144,21 @@ void *kmalloc(size_t size) {
 
     /* Out of heap space: expand heap and retry */
     if (heap_expand(aligned_size + sizeof(heap_block_t))) {
-        return kmalloc(size);
+        return kmalloc_internal(size);
     }
 
     kwarn("kmalloc: allocation failed, heap full");
     return NULL;
 }
 
-void kfree(void *ptr) {
+void *kmalloc(size_t size) {
+    uint64_t rflags = spinlock_acquire_irqsave(&heap_lock);
+    void *ptr = kmalloc_internal(size);
+    spinlock_release_irqrestore(&heap_lock, rflags);
+    return ptr;
+}
+
+static void kfree_internal(void *ptr) {
     if (!ptr) return;
 
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - sizeof(heap_block_t));
@@ -181,6 +190,13 @@ void kfree(void *ptr) {
     }
 }
 
+void kfree(void *ptr) {
+    if (!ptr) return;
+    uint64_t rflags = spinlock_acquire_irqsave(&heap_lock);
+    kfree_internal(ptr);
+    spinlock_release_irqrestore(&heap_lock, rflags);
+}
+
 void *kcalloc(size_t count, size_t size) {
     size_t total = count * size;
     if (count != 0 && total / count != size) {
@@ -204,23 +220,29 @@ void *krealloc(void *ptr, size_t size) {
         return NULL;
     }
 
+    uint64_t rflags = spinlock_acquire_irqsave(&heap_lock);
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - sizeof(heap_block_t));
     if (block->magic != HEAP_ALLOC_MAGIC) {
+        spinlock_release_irqrestore(&heap_lock, rflags);
         kwarn("krealloc: invalid pointer or corrupted heap block");
         return NULL;
     }
 
     if (block->size >= size) {
+        spinlock_release_irqrestore(&heap_lock, rflags);
         return ptr;
     }
 
-    void *new_ptr = kmalloc(size);
+    size_t copy_size = block->size;
+    void *new_ptr = kmalloc_internal(size);
     if (!new_ptr) {
+        spinlock_release_irqrestore(&heap_lock, rflags);
         return NULL;
     }
 
-    memcpy(new_ptr, ptr, block->size);
-    kfree(ptr);
+    memcpy(new_ptr, ptr, copy_size);
+    kfree_internal(ptr);
+    spinlock_release_irqrestore(&heap_lock, rflags);
     return new_ptr;
 }
 

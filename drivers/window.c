@@ -180,7 +180,10 @@ int window_get_event(uint32_t win_id, uint32_t caller_pid, input_event_t *out_ev
         curr->state = PROCESS_SLEEPING;
         scheduler_remove(curr);
         scheduler_request_reschedule();
-        __asm__ volatile ("hlt");
+        while (curr->state == PROCESS_SLEEPING) {
+            __asm__ volatile ("sti; hlt");
+        }
+        curr->state = PROCESS_RUNNING;
 
         /* Re-lookup window after wakeup to verify it wasn't destroyed */
         w = find_window(win_id);

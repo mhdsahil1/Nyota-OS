@@ -26,6 +26,8 @@
 #include "drivers/framebuffer.h"
 #include "drivers/input.h"
 #include "drivers/window.h"
+#include "smp.h"
+#include "lapic.h"
 #include "heap.h"
 #include "pmm.h"
 #include "io.h"
@@ -1015,7 +1017,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.0.0", 5);
+    memcpy(info.kernel_ver, "1.1.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1134,6 +1136,91 @@ static int64_t sys_handle_getsid(int pid) {
 
 /* ── Syscall Dispatcher ───────────────────────────────────────────────────── */
 
+/* ── SMP System Calls (Phase 11) ─────────────────────────────────────────── */
+
+static int64_t sys_handle_sched_setaffinity(int32_t pid, uint64_t mask) {
+    if (mask == 0) return SYS_ERR_EINVAL;
+
+    bool valid_core = false;
+    uint32_t ncpus = cpu_count();
+    for (uint32_t i = 0; i < ncpus && i < 64; i++) {
+        if ((mask & (1ULL << i)) && cpu_is_online(i)) {
+            valid_core = true;
+            break;
+        }
+    }
+    if (!valid_core) return SYS_ERR_EINVAL;
+
+    process_t *target = NULL;
+    if (pid == 0) {
+        target = process_get_current();
+    } else {
+        target = process_find((uint32_t)pid);
+    }
+    if (!target) return SYS_ERR_ESRCH;
+
+    target->cpu_affinity = mask;
+    return SYS_ERR_NONE;
+}
+
+static int64_t sys_handle_sched_getaffinity(int32_t pid, uint64_t u_mask_ptr) {
+    if (!user_validate_pointer((const void *)u_mask_ptr, sizeof(uint64_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    process_t *target = NULL;
+    if (pid == 0) {
+        target = process_get_current();
+    } else {
+        target = process_find((uint32_t)pid);
+    }
+    if (!target) return SYS_ERR_ESRCH;
+
+    uint64_t mask = target->cpu_affinity;
+    if (copy_to_user((void *)u_mask_ptr, &mask, sizeof(uint64_t)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return SYS_ERR_NONE;
+}
+
+static int64_t sys_handle_smp_info(uint64_t u_info_ptr) {
+    if (!user_validate_pointer((const void *)u_info_ptr, sizeof(smp_info_t), true)) {
+        return SYS_ERR_EFAULT;
+    }
+
+    smp_info_t kinfo;
+    memset(&kinfo, 0, sizeof(kinfo));
+    kinfo.cpu_count = cpu_count();
+    kinfo.cpu_online = cpu_online_count();
+
+    for (uint32_t i = 0; i < kinfo.cpu_count && i < 32; i++) {
+        cpu_t *c = cpu_get(i);
+        if (!c) continue;
+
+        kinfo.cpus[i].cpu_id = c->id;
+        kinfo.cpus[i].apic_id = c->apic_id;
+        kinfo.cpus[i].online = c->online ? 1 : 0;
+        kinfo.cpus[i].is_bsp = c->is_bsp ? 1 : 0;
+        kinfo.cpus[i].ticks = c->ticks;
+        kinfo.cpus[i].context_switches = c->context_switches;
+        kinfo.cpus[i].syscall_count = c->syscall_count;
+        kinfo.cpus[i].ipi_count = c->ipi_count;
+
+        if (c->current_proc && c->current_proc->state == PROCESS_RUNNING) {
+            kinfo.cpus[i].current_pid = c->current_proc->pid;
+            strncpy(kinfo.cpus[i].current_name, c->current_proc->name, sizeof(kinfo.cpus[i].current_name) - 1);
+        } else {
+            kinfo.cpus[i].current_pid = -1;
+            strcpy(kinfo.cpus[i].current_name, "idle");
+        }
+    }
+
+    if (copy_to_user((void *)u_info_ptr, &kinfo, sizeof(kinfo)) < 0) {
+        return SYS_ERR_EFAULT;
+    }
+    return SYS_ERR_NONE;
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     switch (num) {
         case SYS_WRITE:     return sys_handle_write(a1, a2, a3);
@@ -1204,12 +1291,18 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_WIN_UPDATE:      return sys_handle_win_update((uint32_t)a1, a2, a3, a4);
         case SYS_WIN_GET_EVENT:   return sys_handle_win_get_event((uint32_t)a1, a2, (uint32_t)a3);
         case SYS_WIN_SERVER_OP:   return sys_handle_win_server_op((uint32_t)a1, a2, a3, a4);
+        case SYS_SCHED_SETAFFINITY: return sys_handle_sched_setaffinity((int32_t)a1, a2);
+        case SYS_SCHED_GETAFFINITY: return sys_handle_sched_getaffinity((int32_t)a1, a2);
+        case SYS_SMP_INFO:          return sys_handle_smp_info(a1);
         default:            return SYS_ERR_ENOSYS;
     }
 }
 
 void syscall_handler(interrupt_frame_t *frame) {
     if (!frame) return;
+
+    cpu_t *c = cpu_current();
+    if (c) c->syscall_count++;
 
     int64_t ret = syscall_dispatch(
         frame->rax,
@@ -1232,7 +1325,7 @@ void syscall_handler(interrupt_frame_t *frame) {
 extern uint64_t isr_stub_table[IDT_ENTRIES];
 
 void syscall_init(void) {
-    idt_set_gate(0x80, isr_stub_table[0x80], 0x08, IDT_GATE_USER_TRAP);
+    idt_set_gate(0x80, isr_stub_table[0x80], 0x08, IDT_GATE_USER_INT);
     interrupt_register_handler(0x80, syscall_handler);
 }
 
@@ -1887,6 +1980,50 @@ int64_t sys_secinfo(void *info) {
         "mov %%rax, %0\n"
         : "=r"(ret)
         : "r"(info)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_sched_setaffinity(int32_t pid, uint64_t mask) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $68, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)pid), "r"(mask)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_sched_getaffinity(int32_t pid, uint64_t *mask_out) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $69, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)pid), "r"((uint64_t)mask_out)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_smp_info(smp_info_t *info) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $70, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)info)
         : "rax", "rdi", "rcx", "r11", "memory"
     );
     return ret;

@@ -535,3 +535,24 @@ All five primary regression test suites pass 100% on the final integration build
 - Window creation and updates remain process-owned; the kernel copies validated user pixels into private per-window backing stores. Process teardown destroys all windows owned by that PID.
 - PID 1 starts the desktop service after core system services. The existing login shell and text console remain available when display startup fails.
 - The initial display path targets QEMU VBE/Bochs 1024x768x32 linear framebuffer. The desktop currently uses a matching 32-bit mode.
+
+---
+
+# Phase 11 SMP & Multicore Architecture
+
+- **ACPI MADT Discovery**: The kernel discovers processor topology via ACPI MADT (Multiple APIC Description Table) records rather than legacy MP tables, identifying processor APIC IDs, I/O APICs, and Interrupt Source Overrides dynamically.
+- **AP Startup Sequence**: Application Processors are booted from physical reset via standard INIT-SIPI-SIPI. A dedicated real-mode trampoline at physical `0x8000` transitions each core from 16-bit real mode through 32-bit protected mode into 64-bit long mode with identity-mapped kernel PML4.
+- **Hardware Timer Calibration**: Local APIC periodic timers are dynamically calibrated against the 100 Hz PIT reference clock over a 20 ms interval, eliminating host clock drift across diverse hardware and emulation environments.
+- **Virtual Wire Interrupt Routing**: Legacy 8259 PIC interrupts are routed via Virtual Wire Mode (`LVT_LINT0` ExtINT and `LVT_LINT1` NMI) solely to the Bootstrap Processor (BSP), with APs masking both LVT registers to eliminate interrupt bus arbitration contention.
+- **Per-CPU State Structure (`cpu_t`)**: Each core maintains independent kernel stacks, per-core GDT/TSS descriptors (`tss.rsp0` isolation), independent idle tasks (`PROCESS_IDLE`), context switch counters, timer tick accumulators, and independent run queue spinlocks.
+- **Deadlock-Free Work Stealing**: In `scheduler_next()`, each core releases its local run-queue lock prior to scanning remote cores for work stealing, guaranteeing that no CPU ever holds more than one run-queue lock simultaneously and eliminating cyclic lock inversion deadlocks.
+- **Inter-Processor Interrupts (IPIs)**: Implemented through Local APIC ICR:
+  - `IPI_VECTOR_RESCHEDULE` (`0x50`): Immediate task preemption and rescheduling on target core.
+  - `IPI_VECTOR_TLB_SHOOTDOWN` (`0x51`): Synchronous multi-core page invalidation with atomic acknowledgement counting.
+  - `IPI_VECTOR_STOP` (`0x52`): Core halt for emergency shutdown and kernel panics.
+- **Multicore System Calls & Diagnostic Utilities**:
+  - `SYS_SMP_INFO` (64): Global CPU discovery and per-core telemetry.
+  - `SYS_SCHED_SETAFFINITY` (65) / `SYS_SCHED_GETAFFINITY` (66): CPU affinity mask controls.
+  - `/bin/smp`: Real-time multicore diagnostics and per-core process placement display.
+  - `/bin/smpstress`: Multicore stress utility spawning workers pinned to distinct cores executing 1,000,000 shared memory operations with zero failures.
+

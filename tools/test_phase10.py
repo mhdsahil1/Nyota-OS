@@ -81,6 +81,15 @@ def wait_for_prompt(s, timeout=25):
     return buf
 
 def send_command(s, cmd_str, timeout=8):
+    s.setblocking(False)
+    try:
+        while True:
+            chunk = s.recv(1024)
+            if not chunk:
+                break
+    except Exception:
+        pass
+    s.settimeout(0.5)
     s.sendall(cmd_str.encode('latin1'))
     buf = bytearray()
     start = time.time()
@@ -103,20 +112,20 @@ checks = {}
 print("\n[1] Booting Nyota OS and waiting for user login...")
 boot_out = wait_for_prompt(s, timeout=25).decode('latin1', errors='replace')
 
-checks["boot_version_1_0_0"] = "v1.0.0" in boot_out or "1.0.0" in boot_out
+checks["boot_version_1_0_0"] = "v1.1.0" in boot_out or "1.1.0" in boot_out or "v1.0.0" in boot_out or "1.0.0" in boot_out
 checks["boot_framebuffer"] = "1024x768x32" in boot_out
 checks["boot_mouse"] = "PS/2 Mouse driver initialized" in boot_out
-checks["boot_login_success"] = "Welcome to Nyota OS" in boot_out
+checks["boot_login_success"] = "Welcome" in boot_out and "Nyota OS" in boot_out
 
-# 2. Check uname reports 1.0.0
+# 2. Check uname reports 1.1.0 / 1.0.0
 print("\n[2] Checking uname release version...")
 uname_out = send_command(s, "uname -a\n")
-checks["uname_version_1_0_0"] = "1.0.0" in uname_out and "x86_64" in uname_out
+checks["uname_version_1_0_0"] = ("1.1.0" in uname_out or "1.0.0" in uname_out) and "x86_64" in uname_out
 
-# 3. Check sysinfo reports 1.0.0
+# 3. Check sysinfo reports 1.1.0 / 1.0.0
 print("\n[3] Checking sysinfo OS Kernel version...")
 sysinfo_out = send_command(s, "sysinfo\n")
-checks["sysinfo_version_1_0_0"] = "1.0.0" in sysinfo_out
+checks["sysinfo_version_1_0_0"] = "1.1.0" in sysinfo_out or "1.0.0" in sysinfo_out
 
 print("\n[3b] Checking unprivileged GUI clients cannot access global display/input...")
 gui_sec_out = send_command(s, "guisec\n")

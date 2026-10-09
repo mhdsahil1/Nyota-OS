@@ -78,6 +78,29 @@
 #define SYS_WIN_UPDATE      65
 #define SYS_WIN_GET_EVENT   66
 #define SYS_WIN_SERVER_OP   67
+#define SYS_SCHED_SETAFFINITY 68
+#define SYS_SCHED_GETAFFINITY 69
+#define SYS_SMP_INFO          70
+
+/* SMP Information Data Structures */
+typedef struct {
+    uint32_t cpu_id;
+    uint32_t apic_id;
+    uint32_t online;
+    uint32_t is_bsp;
+    uint64_t ticks;
+    uint64_t context_switches;
+    uint64_t syscall_count;
+    uint64_t ipi_count;
+    int32_t  current_pid;
+    char     current_name[32];
+} smp_cpu_info_t;
+
+typedef struct {
+    uint32_t cpu_count;
+    uint32_t cpu_online;
+    smp_cpu_info_t cpus[32];
+} smp_info_t;
 
 /* waitpid Options */
 #define WNOHANG             1
@@ -193,5 +216,8 @@ int64_t sys_shm_ctl(int shmid, int cmd, void *buf);
 int64_t sys_getrandom(void *buf, size_t len, unsigned int flags);
 int64_t sys_spawn2(const char *path, char *const argv[], int in_fd, int out_fd);
 int64_t sys_secinfo(void *info);
+int64_t sys_sched_setaffinity(int32_t pid, uint64_t mask);
+int64_t sys_sched_getaffinity(int32_t pid, uint64_t *mask_out);
+int64_t sys_smp_info(smp_info_t *info);
 
 #endif /* NYOTA_SYSCALL_H */

@@ -13,7 +13,25 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.0.0** is a bootable x86_64 hobby operating system with a native user-space desktop, protected Ring 3 applications, networking, and NyotaFS storage. Graphics initialization is optional; a failed display keeps the existing text login path available.
+**Nyota OS v1.1.0** is a bootable x86_64 hobby operating system featuring true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, TCP/IP networking, and NyotaFS storage.
+
+## Phase 11: Symmetric Multiprocessing (SMP) & Multicore Kernel
+
+Phase 11 introduces true hardware multicore execution to Nyota OS:
+- **ACPI MADT Discovery**: Dynamic platform topology parsing for up to 32 x86_64 processor cores.
+- **AP Startup Sequence**: Standard INIT-SIPI-SIPI sequence executing a 16-bit to 64-bit real-mode AP trampoline at physical `0x8000`.
+- **Local APIC & Calibrated Timer**: Per-core Local APIC hardware timers calibrated against the PIT reference clock running at 100 Hz.
+- **Inter-Processor Interrupts (IPIs)**: Reschedule (`0x50`), TLB shootdown (`0x51`), and emergency stop (`0x52`).
+- **Distributed Multiprocessor Scheduling**: Per-CPU ready queues, CPU affinity masks (`sys_smp_info`, `sched_setaffinity`), and deadlock-free work stealing.
+- **Kernel Synchronization**: Fair ticket spinlocks (`spinlock_t`) with interrupt-safe variants.
+- **Diagnostic Tooling**: Userland utilities `/bin/smp` (core status, ticks, processes) and `/bin/smpstress` (1,000,000 multi-worker stress test).
+
+```text
+ACPI MADT -> CPU Topology -> Local APIC (per-core) -> 0x8000 AP Trampoline (INIT-SIPI-SIPI)
+         -> Per-CPU GDT/TSS -> Distributed Run Queues -> Work Stealing & IPI Signaling
+```
+
+See [docs/smp.md](docs/smp.md) for the full architectural breakdown.
 
 ## Phase 10: Graphical User Interface
 
@@ -27,13 +45,17 @@ GUI Applications -> libgui -> Window Server / Desktop Compositor
 
 The desktop starts from PID 1's service configuration after system services. A failed desktop process is reaped by PID 1 and does not prevent text-mode login. Available native programs are Terminal, Files, Editor, System Monitor, Settings, and About. The GUI security boundary keeps framebuffer writes, global input, and window management restricted to the registered server; applications can update and receive events only for their own windows.
 
-![Nyota OS v1.0.0 desktop running Terminal and About](assets/nyota-desktop.png)
+![Nyota OS desktop running Terminal and About](assets/nyota-desktop.png)
 
-Build with `make all`, launch with `make run`, and run the GUI integration and security suites with `python tools/test_phase10.py` and `python tools/test_security.py`.
+Build with `make all`, launch with `make run`, and run test suites:
+- `python tools/test_smp.py` (SMP test across `-smp 1, 2, 4, 8`)
+- `python tools/test_security.py` (Security & IPC test)
+- `python tools/test_phase10.py` (GUI & desktop test)
+- `python tools/test_network.py` (Networking test)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-10%3A%20GUI%20%26%20Desktop-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v1.0.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-11%3A%20SMP%20%26%20Multicore-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v1.1.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">

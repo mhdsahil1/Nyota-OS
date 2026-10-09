@@ -7,12 +7,14 @@
 #include "kernel.h"
 #include "memory.h"
 #include "vga.h"
+#include "spinlock.h"
 
 /* Linker symbols */
 extern uint8_t _kernel_start[];
 extern uint8_t _kernel_end[];
 
 /* Internal state */
+static spinlock_t pmm_lock = SPINLOCK_INIT;
 static uint8_t *pmm_bitmap = NULL;
 static uint64_t pmm_total_frames = 0;
 static uint64_t pmm_used_frames = 0;
@@ -143,17 +145,20 @@ void pmm_init(void) {
 /* ── Allocation & Freeing ─────────────────────────────────────────────────── */
 
 void *pmm_alloc_page(void) {
+    uint64_t rflags = spinlock_acquire_irqsave(&pmm_lock);
     for (uint64_t i = 1; i < pmm_total_frames; i++) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
             pmm_used_frames++;
             pmm_free_frames--;
+            spinlock_release_irqrestore(&pmm_lock, rflags);
 
             void *page = (void *)(i * PAGE_SIZE);
             memset(page, 0, PAGE_SIZE);
             return page;
         }
     }
+    spinlock_release_irqrestore(&pmm_lock, rflags);
     return NULL;
 }
 
@@ -164,6 +169,7 @@ void *pmm_alloc_pages(size_t count) {
     uint64_t consecutive = 0;
     uint64_t start_frame = 0;
 
+    uint64_t rflags = spinlock_acquire_irqsave(&pmm_lock);
     for (uint64_t i = 1; i < pmm_total_frames; i++) {
         if (!bitmap_test(i)) {
             if (consecutive == 0) {
@@ -176,6 +182,7 @@ void *pmm_alloc_pages(size_t count) {
                 }
                 pmm_used_frames += count;
                 pmm_free_frames -= count;
+                spinlock_release_irqrestore(&pmm_lock, rflags);
 
                 void *page = (void *)(start_frame * PAGE_SIZE);
                 memset(page, 0, count * PAGE_SIZE);
@@ -185,6 +192,7 @@ void *pmm_alloc_pages(size_t count) {
             consecutive = 0;
         }
     }
+    spinlock_release_irqrestore(&pmm_lock, rflags);
     return NULL;
 }
 
@@ -203,7 +211,9 @@ void pmm_free_page(void *address) {
         return;
     }
 
+    uint64_t rflags = spinlock_acquire_irqsave(&pmm_lock);
     if (!bitmap_test(frame)) {
+        spinlock_release_irqrestore(&pmm_lock, rflags);
         kwarn("pmm_free_page: double free detected");
         return;
     }
@@ -211,6 +221,7 @@ void pmm_free_page(void *address) {
     bitmap_clear(frame);
     pmm_used_frames--;
     pmm_free_frames++;
+    spinlock_release_irqrestore(&pmm_lock, rflags);
 }
 
 void pmm_free_pages(void *address, size_t count) {

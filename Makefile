@@ -150,9 +150,13 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/input.o            \
     $(BUILD_DIR)/framebuffer.o      \
     $(BUILD_DIR)/gfx.o              \
-    $(BUILD_DIR)/window.o
+    $(BUILD_DIR)/window.o           \
+    $(BUILD_DIR)/acpi.o             \
+    $(BUILD_DIR)/lapic.o            \
+    $(BUILD_DIR)/smp.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
+
 
 # ── Userspace Library & Binaries ─────────────────────────────────────────────
 LIBNYOTA := $(BUILD_DIR)/libnyota.a
@@ -204,9 +208,13 @@ USER_BINARIES := \
     fs/root/bin/sysmon      \
     fs/root/bin/settings    \
     fs/root/bin/about       \
-    fs/root/bin/guisec
+    fs/root/bin/guisec      \
+    fs/root/bin/smp         \
+    fs/root/bin/smpstress
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
+SMP              ?= 4
+QEMU_SMP_FLAGS   := -smp $(SMP)
 QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive format=raw,file=$(DATA_IMAGE),index=1,media=disk
 QEMU_NET_FLAGS   := -netdev user,id=net0,hostfwd=tcp::8080-:8080 -device e1000,netdev=net0
 
@@ -225,6 +233,9 @@ all: $(IMAGE) $(DATA_IMAGE)
 user: $(USER_BINARIES)
 fs: $(DATA_IMAGE)
 disk: $(DATA_IMAGE)
+
+KERNEL_HEADERS := $(wildcard include/*.h) $(wildcard include/*/*.h)
+$(KERNEL_C_OBJS): $(KERNEL_HEADERS)
 
 # ── Build Disk Image with host mkimage tool ───────────────────────────────────
 $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(MKIMAGE)
@@ -323,7 +334,11 @@ $(KERNEL_ELF): $(ALL_KERNEL_OBJS) linker.ld
 	@$(LD) $(LD_FLAGS) -T linker.ld -e kernel_entry -o $@ $(ALL_KERNEL_OBJS)
 
 # ── Assembly Compilation ──────────────────────────────────────────────────────
-$(BUILD_DIR)/kernel_entry.o: kernel/kernel_entry.asm | $(BUILD_DIR)
+$(BUILD_DIR)/trampoline.bin: kernel/arch/x86_64/trampoline.asm | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/trampoline.asm
+	@$(NASM) -f bin $< -o $@
+
+$(BUILD_DIR)/kernel_entry.o: kernel/kernel_entry.asm $(BUILD_DIR)/trampoline.bin | $(BUILD_DIR)
 	@echo [BUILD] kernel/kernel_entry.asm
 	@$(NASM) -f $(ASM_FMT) $< -o $@
 
@@ -568,32 +583,44 @@ $(BUILD_DIR)/window.o: drivers/window.c | $(BUILD_DIR)
 	@echo [BUILD] drivers/window.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/acpi.o: kernel/arch/x86_64/acpi.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/acpi.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lapic.o: kernel/arch/x86_64/lapic.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/lapic.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/smp.o: kernel/arch/x86_64/smp.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/arch/x86_64/smp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 # ── Build Directory ───────────────────────────────────────────────────────────
 $(BUILD_DIR):
 	@$(MKDIR_CMD)
 
 # ── Run in QEMU ───────────────────────────────────────────────────────────────
 run: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -serial stdio
 
 # Run in QEMU with serial output piped to terminal without popup window
 run-serial: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run scheduler / multitasking tests
 scheduler-test: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 stress-test: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run automated memory test runner
 memtest: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -display none -serial stdio
 
 # Run with GDB server attached (waits on port 1234)
 run-debug: $(IMAGE) $(DATA_IMAGE)
-	$(QEMU) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -s -S -serial stdio
+	$(QEMU) $(QEMU_SMP_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -s -S -serial stdio
 
 debug: CFLAGS += -g
 debug: all

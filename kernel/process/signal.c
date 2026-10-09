@@ -20,6 +20,21 @@ void signal_init_process(process_t *proc) {
     }
 }
 
+bool signal_is_pending_interruptible(process_t *proc) {
+    if (!proc) return false;
+    uint32_t deliverable = proc->pending_signals & ~proc->blocked_signals;
+    if (!deliverable) return false;
+    for (int sig = 1; sig < NSIG; sig++) {
+        if (deliverable & (1 << sig)) {
+            uint64_t handler = proc->signal_handlers[sig];
+            if (handler == (uint64_t)SIG_IGN) continue;
+            if (handler == (uint64_t)SIG_DFL && (sig == SIGCHLD || sig == SIGCONT)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
 int signal_send(process_t *target, int sig) {
     if (!target || sig < 1 || sig >= NSIG) {
         return -SYS_ERR_EINVAL;

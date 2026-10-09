@@ -9,8 +9,10 @@
 #include "memory.h"
 #include "vga.h"
 #include "kernel.h"
+#include "spinlock.h"
 
 static ata_device_t ata_drives[2]; /* Drive 0: Primary Master, Drive 1: Primary Slave */
+static spinlock_t ata_lock = {0};
 
 /* 400ns delay by reading alternate status register 4 times */
 static inline void ata_delay(uint16_t ctrl_base) {
@@ -120,32 +122,38 @@ static int ata_write_lba28(ata_device_t *dev, uint32_t lba, uint8_t count, const
 int ata_read_sectors(ata_device_t *dev, uint64_t lba, uint32_t count, void *buf) {
     if (!dev || !dev->present || !buf || count == 0) return -1;
 
+    uint64_t rflags = spinlock_acquire_irqsave(&ata_lock);
     uint8_t *ptr = (uint8_t *)buf;
     while (count > 0) {
         uint32_t batch = (count > 128) ? 128 : count;
         if (ata_read_lba28(dev, (uint32_t)lba, (uint8_t)batch, ptr) != 0) {
+            spinlock_release_irqrestore(&ata_lock, rflags);
             return -1;
         }
         lba += batch;
         count -= batch;
         ptr += batch * ATA_SECTOR_SIZE;
     }
+    spinlock_release_irqrestore(&ata_lock, rflags);
     return 0;
 }
 
 int ata_write_sectors(ata_device_t *dev, uint64_t lba, uint32_t count, const void *buf) {
     if (!dev || !dev->present || !buf || count == 0) return -1;
 
+    uint64_t rflags = spinlock_acquire_irqsave(&ata_lock);
     const uint8_t *ptr = (const uint8_t *)buf;
     while (count > 0) {
         uint32_t batch = (count > 128) ? 128 : count;
         if (ata_write_lba28(dev, (uint32_t)lba, (uint8_t)batch, ptr) != 0) {
+            spinlock_release_irqrestore(&ata_lock, rflags);
             return -1;
         }
         lba += batch;
         count -= batch;
         ptr += batch * ATA_SECTOR_SIZE;
     }
+    spinlock_release_irqrestore(&ata_lock, rflags);
     return 0;
 }
 

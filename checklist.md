@@ -146,4 +146,22 @@
 - [x] Native GUI programs and toolkit integrated into the NyotaFS image
 - [x] GUI global input/framebuffer/window-server calls restricted to the PID 1 desktop service
 - [x] `tools/test_phase10.py` passes 24/24; `tools/test_security.py` passes 25/25
-- [ ] Interactive visual/input walkthrough and 5+ application display stress validation
+- [x] Interactive visual/input walkthrough and 5+ application display stress validation
+
+## Phase 11: Symmetric Multiprocessing (SMP) & Multicore Kernel
+- [x] Hardware CPU discovery via ACPI RSDP, RSDT/XSDT, and MADT (Local APIC entries, I/O APIC, GSI overrides)
+- [x] Application Processor (AP) startup sequence using standard INIT-SIPI-SIPI protocol
+- [x] 16-bit to 64-bit real mode trampoline assembled at physical `0x8000` with shared communication mailbox
+- [x] Local APIC configuration: Virtual wire mode, Spurious vector, Task Priority Register (TPR = 0)
+- [x] Calibrated Local APIC periodic timer against PIT reference clock (100 Hz per core)
+- [x] Inter-Processor Interrupts (IPIs): Reschedule (`0x50`), TLB Shootdown (`0x51`), Emergency Stop (`0x52`)
+- [x] Per-CPU state structure (`cpu_t`): dedicated kernel stacks, per-core GDT/TSS (`tss.rsp0` isolation), independent idle tasks
+- [x] Ticket spinlocks (`spinlock_t`) with fair FIFO acquisition and interrupt-safe variants (`spinlock_acquire_irqsave`)
+- [x] Multiprocessor scheduler: distributed per-CPU ready queues, lowest-load placement, and deadlock-free work stealing
+- [x] Multicore system calls: `SYS_SMP_INFO` (64), `SYS_SCHED_SETAFFINITY` (65), `SYS_SCHED_GETAFFINITY` (66)
+- [x] Diagnostic tooling: `/bin/smp` (core status, ticks, processes) and `/bin/smpstress` (1,000,000 operation multicore stress test)
+- [x] System info utility `/bin/sysinfo` updated for multicore topology reporting
+- [x] Automated test suite `tools/test_smp.py` passing 100% across `-smp 1`, `-smp 2`, `-smp 4`, and `-smp 8` cores
+- [x] Complete regression validation: `test_security.py` (25/25), `test_phase10.py` (24/24), `test_network.py` (100%)
+- [x] Comprehensive architectural documentation in `docs/smp.md`
+

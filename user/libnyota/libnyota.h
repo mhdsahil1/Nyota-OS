@@ -91,6 +91,30 @@ int spawn2(const char *path, char *const argv[], int in_fd, int out_fd);
 int waitpid(int pid, int *status);
 int waitpid_options(int pid, int *status, int options);
 
+/* SMP & Multi-Core Syscalls (Phase 11) */
+typedef struct {
+    uint32_t cpu_id;
+    uint32_t apic_id;
+    uint32_t online;
+    uint32_t is_bsp;
+    uint64_t ticks;
+    uint64_t context_switches;
+    uint64_t syscall_count;
+    uint64_t ipi_count;
+    int32_t  current_pid;
+    char     current_name[32];
+} smp_cpu_info_t;
+
+typedef struct {
+    uint32_t cpu_count;
+    uint32_t cpu_online;
+    smp_cpu_info_t cpus[32];
+} smp_info_t;
+
+int sched_setaffinity(int pid, uint64_t mask);
+int sched_getaffinity(int pid, uint64_t *mask);
+int smp_info(smp_info_t *info);
+
 #define _WAITPID_2(p, s) waitpid((p), (s))
 #define _WAITPID_3(p, s, o) waitpid_options((p), (s), (o))
 #define _WAITPID_GET(_1, _2, _3, NAME, ...) NAME

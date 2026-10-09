@@ -7,33 +7,7 @@
 #include "kernel.h"
 #include "memory.h"
 
-/* Standard 8-byte GDT entry structure */
-typedef struct __attribute__((packed)) {
-    uint16_t limit_low;
-    uint16_t base_low;
-    uint8_t  base_middle;
-    uint8_t  access;
-    uint8_t  granularity;
-    uint8_t  base_high;
-} gdt_entry_t;
 
-/* 16-byte 64-bit TSS descriptor structure */
-typedef struct __attribute__((packed)) {
-    uint16_t limit_low;
-    uint16_t base_low;
-    uint8_t  base_middle;
-    uint8_t  access;
-    uint8_t  granularity;
-    uint8_t  base_high;
-    uint32_t base_upper32;
-    uint32_t reserved;
-} gdt_tss_entry_t;
-
-/* GDT descriptor pointer for LGDT */
-typedef struct __attribute__((packed)) {
-    uint16_t limit;
-    uint64_t base;
-} gdt_ptr_t;
 
 /* 7 descriptors:
  * 0: Null Descriptor            (0x00)
@@ -96,4 +70,40 @@ void gdt_init(void) {
 
     /* Flush and reload GDTR and segment registers */
     gdt_flush(&gdt_ptr);
+}
+
+#include "smp.h"
+#include "tss.h"
+
+void gdt_init_cpu(struct cpu *cpu) {
+    if (!cpu) return;
+
+    memset(cpu->gdt, 0, sizeof(cpu->gdt));
+
+    cpu->gdt_ptr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
+    cpu->gdt_ptr.base  = (uint64_t)&cpu->gdt[0];
+
+    /* Copy segment descriptors 0..4 (Null, KCode, KData, UData, UCode) */
+    memcpy(cpu->gdt, gdt_entries, 5 * sizeof(gdt_entry_t));
+
+    /* Set I/O Map Base to size of TSS and configure default RSP0 */
+    cpu->tss.iomap_base = sizeof(tss_t);
+    cpu->tss.rsp0 = cpu->kernel_stack_top;
+
+    /* 0x28: 64-bit TSS descriptor (entries 5 and 6) */
+    uint64_t tss_base = (uint64_t)&cpu->tss;
+    uint32_t tss_limit = sizeof(tss_t) - 1;
+
+    gdt_tss_entry_t *tss_entry = (gdt_tss_entry_t *)&cpu->gdt[5];
+    tss_entry->limit_low    = (uint16_t)(tss_limit & 0xFFFF);
+    tss_entry->base_low     = (uint16_t)(tss_base & 0xFFFF);
+    tss_entry->base_middle  = (uint8_t)((tss_base >> 16) & 0xFF);
+    tss_entry->access       = 0x89; /* Present, DPL 0, 64-bit Available TSS */
+    tss_entry->granularity  = (uint8_t)((tss_limit >> 16) & 0x0F);
+    tss_entry->base_high    = (uint8_t)((tss_base >> 24) & 0xFF);
+    tss_entry->base_upper32 = (uint32_t)((tss_base >> 32) & 0xFFFFFFFF);
+    tss_entry->reserved     = 0;
+
+    gdt_flush(&cpu->gdt_ptr);
+    tss_load(GDT_TSS_SEG);
 }

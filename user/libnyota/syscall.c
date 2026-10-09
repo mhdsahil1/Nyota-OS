@@ -420,3 +420,15 @@ int win_get_event(uint32_t win_id, input_event_t *ev, int block) {
 int win_server_op(uint32_t op, void *a1, void *a2, void *a3) {
     return (int)syscall4(67, (uint64_t)op, (uint64_t)a1, (uint64_t)a2, (uint64_t)a3);
 }
+
+int sched_setaffinity(int pid, uint64_t mask) {
+    return (int)syscall2(68, (uint64_t)pid, mask);
+}
+
+int sched_getaffinity(int pid, uint64_t *mask) {
+    return (int)syscall2(69, (uint64_t)pid, (uint64_t)mask);
+}
+
+int smp_info(smp_info_t *info) {
+    return (int)syscall1(70, (uint64_t)info);
+}

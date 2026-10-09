@@ -42,5 +42,6 @@ int signal_send(struct process *target, int sig);
 int signal_send_pid(uint32_t pid, int sig);
 void signal_send_pgrp(uint32_t pgrp, int sig);
 void signal_check_and_deliver(interrupt_frame_t *frame);
+bool signal_is_pending_interruptible(struct process *proc);
 
 #endif /* NYOTA_SIGNAL_H */

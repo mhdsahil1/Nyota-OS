@@ -33,10 +33,20 @@ void tss_init(void) {
     tss_load(GDT_TSS_SEG);
 }
 
+#include "smp.h"
+
 void tss_set_rsp0(uint64_t rsp0) {
     kernel_tss.rsp0 = rsp0;
+    cpu_t *c = cpu_current();
+    if (c) {
+        c->tss.rsp0 = rsp0;
+    }
 }
 
 uint64_t tss_get_rsp0(void) {
+    cpu_t *c = cpu_current();
+    if (c && c->online) {
+        return c->tss.rsp0;
+    }
     return kernel_tss.rsp0;
 }

@@ -44,11 +44,11 @@ int main(int argc, char **argv) {
         gui_draw_rect(win, 12, 12, ABOUT_WIDTH - 24, 60, COLOR_ACCENT_PRIMARY);
 
         gui_draw_text(win, 24, 22, "N Y O T A   O S", COLOR_ACCENT_PRIMARY, 0);
-        gui_draw_text(win, 24, 42, "Version 1.0.0 (Release Milestone)", COLOR_TITLE_ACTIVE, 0);
+        gui_draw_text(win, 24, 42, "Version 1.1.0 (SMP & Multicore Release)", COLOR_TITLE_ACTIVE, 0);
 
         /* Subsystems Card */
         int cy = 84;
-        gui_draw_text(win, 24, cy, "Architecture : x86_64 Long Mode", COLOR_TEXT_PRIMARY, 0);
+        gui_draw_text(win, 24, cy, "Architecture : x86_64 Long Mode (SMP)", COLOR_TEXT_PRIMARY, 0);
         cy += 20;
         gui_draw_text(win, 24, cy, "Kernel       : Preemptive Scheduler & 4-Level Paging", COLOR_TEXT_MUTED, 0);
         cy += 20;

@@ -121,6 +121,7 @@ isr_common_stub:
     mov  es, ax
 
 .restore_regs:
+    cli
     ; 5. Restore general-purpose registers
     pop  r15
     pop  r14

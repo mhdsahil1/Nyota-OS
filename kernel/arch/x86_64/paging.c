@@ -7,8 +7,12 @@
 #include "kernel.h"
 #include "memory.h"
 #include "vga.h"
+#include "spinlock.h"
 
 static page_table_t *kernel_pml4 = NULL;
+static spinlock_t paging_lock = SPINLOCK_INIT;
+
+extern void smp_tlb_shootdown(uint64_t virt);
 
 /* ── CR3 & TLB Operations ─────────────────────────────────────────────────── */
 
@@ -23,7 +27,7 @@ void paging_load_cr3(uint64_t pml4_phys) {
 }
 
 void paging_invlpg(uint64_t virt) {
-    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    smp_tlb_shootdown(virt);
 }
 
 page_table_t *paging_get_kernel_pml4(void) {
@@ -72,10 +76,15 @@ bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64
     uint64_t pd_i   = PD_INDEX(virt);
     uint64_t pt_i   = PT_INDEX(virt);
 
+    uint64_t rflags = spinlock_acquire_irqsave(&paging_lock);
+
     /* 1. Walk or create PDPT */
     if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) {
         void *new_pdpt = pmm_alloc_page();
-        if (!new_pdpt) return false;
+        if (!new_pdpt) {
+            spinlock_release_irqrestore(&paging_lock, rflags);
+            return false;
+        }
         pml4->entries[pml4_i] = ((uint64_t)new_pdpt) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
     } else if (flags & PAGE_USER) {
         pml4->entries[pml4_i] |= PAGE_USER;
@@ -85,7 +94,10 @@ bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64
     /* 2. Walk or create PD */
     if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) {
         void *new_pd = pmm_alloc_page();
-        if (!new_pd) return false;
+        if (!new_pd) {
+            spinlock_release_irqrestore(&paging_lock, rflags);
+            return false;
+        }
         pdpt->entries[pdpt_i] = ((uint64_t)new_pd) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
     } else if (flags & PAGE_USER) {
         pdpt->entries[pdpt_i] |= PAGE_USER;
@@ -95,10 +107,14 @@ bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64
     /* 3. Walk or create PT */
     if (!(pd->entries[pd_i] & PAGE_PRESENT)) {
         void *new_pt = pmm_alloc_page();
-        if (!new_pt) return false;
+        if (!new_pt) {
+            spinlock_release_irqrestore(&paging_lock, rflags);
+            return false;
+        }
         pd->entries[pd_i] = ((uint64_t)new_pt) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
     } else if (pd->entries[pd_i] & PAGE_HUGE) {
         /* Already mapped as 2MB huge page */
+        spinlock_release_irqrestore(&paging_lock, rflags);
         return false;
     } else if (flags & PAGE_USER) {
         pd->entries[pd_i] |= PAGE_USER;
@@ -107,6 +123,8 @@ bool paging_map_page_in(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64
 
     /* 4. Set PT entry and invalidate TLB */
     pt->entries[pt_i] = phys | (flags & ~PAGE_ENTRY_ADDR_MASK) | PAGE_PRESENT;
+    spinlock_release_irqrestore(&paging_lock, rflags);
+
     paging_invlpg(virt);
 
     return true;
@@ -126,20 +144,39 @@ bool paging_unmap_page_in(page_table_t *pml4, uint64_t virt) {
     uint64_t pd_i   = PD_INDEX(virt);
     uint64_t pt_i   = PT_INDEX(virt);
 
-    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) return false;
+    uint64_t rflags = spinlock_acquire_irqsave(&paging_lock);
+
+    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) {
+        spinlock_release_irqrestore(&paging_lock, rflags);
+        return false;
+    }
     page_table_t *pdpt = (page_table_t *)(pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
 
-    if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) return false;
+    if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) {
+        spinlock_release_irqrestore(&paging_lock, rflags);
+        return false;
+    }
     page_table_t *pd = (page_table_t *)(pdpt->entries[pdpt_i] & PAGE_ENTRY_ADDR_MASK);
 
-    if (!(pd->entries[pd_i] & PAGE_PRESENT)) return false;
-    if (pd->entries[pd_i] & PAGE_HUGE) return false;
+    if (!(pd->entries[pd_i] & PAGE_PRESENT)) {
+        spinlock_release_irqrestore(&paging_lock, rflags);
+        return false;
+    }
+    if (pd->entries[pd_i] & PAGE_HUGE) {
+        spinlock_release_irqrestore(&paging_lock, rflags);
+        return false;
+    }
 
     page_table_t *pt = (page_table_t *)(pd->entries[pd_i] & PAGE_ENTRY_ADDR_MASK);
 
-    if (!(pt->entries[pt_i] & PAGE_PRESENT)) return false;
+    if (!(pt->entries[pt_i] & PAGE_PRESENT)) {
+        spinlock_release_irqrestore(&paging_lock, rflags);
+        return false;
+    }
 
     pt->entries[pt_i] = 0;
+    spinlock_release_irqrestore(&paging_lock, rflags);
+
     paging_invlpg(virt);
 
     return true;

@@ -36,6 +36,8 @@ static void serial_wait_ready(void) {
     }
 }
 
+extern void tty_handle_key(char c);
+
 static void serial_irq_handler(interrupt_frame_t *frame) {
     (void)frame;
     while ((inb(COM1_PORT + UART_LSR) & LSR_DATA_READY) != 0) {
@@ -45,6 +47,14 @@ static void serial_irq_handler(interrupt_frame_t *frame) {
             serial_rx_buf[serial_rx_head] = c;
             serial_rx_head = next;
         }
+    }
+
+    /* Drain into active TTY immediately */
+    while (serial_rx_head != serial_rx_tail) {
+        char sc = serial_rx_buf[serial_rx_tail];
+        serial_rx_tail = (serial_rx_tail + 1) % SERIAL_RX_BUF_SIZE;
+        if (sc == '\r') sc = '\n';
+        tty_handle_key(sc);
     }
 }
 

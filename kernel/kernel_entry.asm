@@ -43,3 +43,13 @@ kernel_entry:
     cli
     hlt
     jmp  .hang
+
+; ── Embedded SMP AP Trampoline Binary ────────────────────────────────────────
+section .rodata
+global trampoline_blob_start
+global trampoline_blob_end
+align 16
+trampoline_blob_start:
+    incbin "build/trampoline.bin"
+trampoline_blob_end:
+

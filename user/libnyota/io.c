@@ -39,6 +39,9 @@ int getline(char *buf, size_t size) {
         char c = 0;
         int64_t n = read(STDIN_FILENO, &c, 1);
         if (n <= 0) {
+            if (n == -4 || n == 4) {
+                continue;
+            }
             if (i == 0) return -1;
             break;
         }

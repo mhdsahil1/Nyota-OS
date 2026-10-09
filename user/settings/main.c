@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
                 break;
 
             case 4: /* System */
-                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.0.0", COLOR_TITLE_ACTIVE, 0);
+                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.1.0 (SMP)", COLOR_TITLE_ACTIVE, 0);
                 content_y += 24;
                 gui_draw_text(win, content_x, content_y, "Kernel Architecture : x86_64 Long Mode", COLOR_TEXT_MUTED, 0);
                 content_y += 20;

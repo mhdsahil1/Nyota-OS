@@ -25,6 +25,9 @@
 #include "timer.h"
 #include "syscall.h"
 #include "drivers/tty.h"
+#include "spinlock.h"
+
+static spinlock_t process_table_lock = SPINLOCK_INIT;
 
 process_t *process_table[PROCESS_MAX_COUNT] = {0};
 static process_t process_table_storage[PROCESS_MAX_COUNT];
@@ -216,29 +219,34 @@ static uint64_t setup_user_stack(page_table_t *pml4, uint64_t stack_top, const c
 /* ── Create Process from Memory Blob (Phase 5 compatibility) ──────────────── */
 
 process_t *process_create(const char *name, uint64_t entry_point, const void *code_blob, size_t code_size) {
+    uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
     int slot = -1;
     for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
         if (!process_slot_in_use[i]) {
             slot = (int)i;
+            process_slot_in_use[i] = true;
             break;
         }
     }
+    uint32_t assigned_pid = (slot != -1) ? next_pid++ : 0;
+    spinlock_release_irqrestore(&process_table_lock, rflags);
 
     if (slot == -1) {
         kwarn("process_create: process table full");
         return NULL;
     }
 
-    process_slot_in_use[slot] = true;
     process_t *proc = &process_table_storage[slot];
     memset(proc, 0, sizeof(process_t));
 
-    proc->pid = next_pid++;
+    proc->pid = assigned_pid;
     proc->parent_pid = 0;
     proc->state = PROCESS_NEW;
     proc->exit_status = 0;
     proc->runtime_ticks = 0;
     proc->context_switches = 0;
+    proc->cpu_affinity = 0xFFFFFFFFFFFFFFFFULL;
+    proc->current_cpu = 0;
 
     if (name) {
         size_t nlen = strlen(name);
@@ -332,25 +340,34 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
 
     uint64_t inode_num = 0;
     if (nyotafs_resolve_path(fs, path, &inode_num) != 0) {
+        serial_write("[ELF_RESOLVE_FAIL] path="); serial_write(path); serial_write("\n");
         kwarn("process_create_from_elf: failed to resolve path");
         return NULL;
     }
+    serial_write("[ELF_CREATE] path="); serial_write(path); serial_write(" inode="); serial_write_dec(inode_num); serial_write("\n");
 
+    uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
     int slot = -1;
     for (size_t i = 0; i < PROCESS_MAX_COUNT; i++) {
         if (!process_slot_in_use[i]) {
             slot = (int)i;
+            process_slot_in_use[i] = true;
             break;
         }
     }
+    uint32_t assigned_pid = (slot != -1) ? next_pid++ : 0;
+    spinlock_release_irqrestore(&process_table_lock, rflags);
+
     if (slot == -1) {
         kwarn("process_create_from_elf: process table full");
         return NULL;
     }
 
-    process_slot_in_use[slot] = true;
     process_t *proc = &process_table_storage[slot];
     memset(proc, 0, sizeof(process_t));
+    proc->pid = assigned_pid;
+    proc->cpu_affinity = 0xFFFFFFFFFFFFFFFFULL;
+    proc->current_cpu = 0;
 
     process_t *curr = process_get_current();
     if (curr && curr->pid > 0 && curr->max_processes > 0) {
@@ -365,10 +382,11 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
         }
     }
 
-    proc->pid = next_pid++;
     proc->parent_pid = (curr && curr->pid > 0) ? curr->pid : 0;
     proc->state = PROCESS_NEW;
     proc->exit_status = 0;
+    proc->cpu_affinity = (curr && curr->cpu_affinity) ? curr->cpu_affinity : 0xFFFFFFFFFFFFFFFFULL;
+    proc->current_cpu = 0;
 
     /* Extract process name from path */
     const char *pname = path;

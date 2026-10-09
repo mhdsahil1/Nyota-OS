@@ -24,11 +24,20 @@ int main(int argc, char **argv) {
     uint32_t mins = (uint32_t)((sec % 3600) / 60);
     uint32_t secs = (uint32_t)(sec % 60);
 
+    smp_info_t smp;
+    int cpus_online = 1;
+    int cpus_detected = 1;
+    if (smp_info(&smp) == 0 && smp.cpu_online > 0) {
+        cpus_online = (int)smp.cpu_online;
+        cpus_detected = (int)smp.cpu_count;
+    }
+
     printf("========================================\n");
     printf("         NYOTA OS SYSTEM INFO           \n");
     printf("========================================\n");
     printf("OS Kernel    : NyotaOS %s\n", info.kernel_ver);
     printf("Architecture : %s\n", info.machine);
+    printf("SMP Cores    : %d online / %d detected\n", cpus_online, cpus_detected);
     printf("Memory       : Total %d MB | Used %d MB | Free %d MB\n", (int)total_mb, (int)used_mb, (int)free_mb);
     printf("Processes    : %d active\n", info.process_count);
     printf("Uptime       : %02d:%02d:%02d\n", hours, mins, secs);

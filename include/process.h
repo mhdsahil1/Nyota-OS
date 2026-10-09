@@ -53,6 +53,10 @@ typedef struct process {
     uint32_t max_processes;
     uint32_t max_sockets;
 
+    /* SMP & Multi-Core Scheduling */
+    uint64_t cpu_affinity;       /* Bitmask of allowed CPUs (1ULL << cpu_id) */
+    uint32_t current_cpu;        /* CPU currently executing or assigned */
+
     /* Signals */
     uint32_t pending_signals;
     uint32_t blocked_signals;
@@ -95,6 +99,7 @@ typedef struct process {
 
     struct process *next;        /* Queue link (Ready / Sleep / Process list) */
     struct process *prev;
+    struct process *wait_next;   /* Wait queue link (sockets / IPC) */
 } process_t;
 
 /* Process Subsystem APIs */

@@ -38,11 +38,11 @@ static void socket_remove_waiter(socket_t *sock, process_t *proc) {
     process_t **curr = &sock->waiters;
     while (*curr) {
         if (*curr == proc) {
-            *curr = proc->next;
-            proc->next = NULL;
+            *curr = proc->wait_next;
+            proc->wait_next = NULL;
             break;
         }
-        curr = &((*curr)->next);
+        curr = &((*curr)->wait_next);
     }
 }
 
@@ -56,15 +56,16 @@ void socket_wait(socket_t *sock) {
     process_t *chk = sock->waiters;
     while (chk) {
         if (chk == proc) break;
-        chk = chk->next;
+        chk = chk->wait_next;
     }
     if (!chk) {
-        proc->next = sock->waiters;
+        proc->wait_next = sock->waiters;
         sock->waiters = proc;
     }
 
     proc->state = PROCESS_SLEEPING;
-    scheduler_yield();
+    scheduler_remove(proc);
+    scheduler_request_reschedule();
 
     while (proc->state == PROCESS_SLEEPING) {
         __asm__ volatile ("sti; hlt");
@@ -82,9 +83,8 @@ void socket_wake(socket_t *sock) {
     sock->waiters = NULL;
 
     while (curr) {
-        process_t *nxt = curr->next;
-        curr->next = NULL;
-        curr->prev = NULL;
+        process_t *nxt = curr->wait_next;
+        curr->wait_next = NULL;
         curr->state = PROCESS_READY;
         scheduler_add(curr);
         curr = nxt;

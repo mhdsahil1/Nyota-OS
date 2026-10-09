@@ -12,6 +12,7 @@
 #include "vga.h"
 #include "kernel.h"
 #include "process.h"
+#include "serial.h"
 
 bool elf_validate_header(const Elf64_Ehdr *ehdr) {
     if (!ehdr) return false;
@@ -57,21 +58,27 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
 
     nyota_inode_t inode;
     if (nyotafs_read_inode(fs, inode_num, &inode) != 0) {
+        kwarn("elf_load: nyotafs_read_inode failed");
         return NYOTA_ENOENT;
     }
 
     if (inode.size < sizeof(Elf64_Ehdr)) {
+        serial_write("[ELF_FAIL_SIZE] inode="); serial_write_dec(inode_num);
+        serial_write(" size="); serial_write_dec(inode.size); serial_write("\n");
+        kwarn("elf_load: inode.size < sizeof(Elf64_Ehdr)");
         return NYOTA_ENOEXEC;
     }
 
     /* 1. Read ELF Header */
     Elf64_Ehdr ehdr;
     if (nyotafs_read_file(fs, &inode, 0, &ehdr, sizeof(Elf64_Ehdr)) != sizeof(Elf64_Ehdr)) {
+        kwarn("elf_load: read_file ehdr failed");
         return NYOTA_EIO;
     }
 
     /* 2. Validate ELF Header */
     if (!elf_validate_header(&ehdr)) {
+        kwarn("elf_load: validate header failed");
         return NYOTA_ENOEXEC;
     }
 
@@ -83,6 +90,7 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
         uint64_t ph_offset = ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize;
 
         if (nyotafs_read_file(fs, &inode, ph_offset, &phdr, sizeof(Elf64_Phdr)) != sizeof(Elf64_Phdr)) {
+            kwarn("elf_load: read_file phdr failed");
             return NYOTA_EIO;
         }
 
@@ -156,11 +164,13 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
 
             uint64_t phys_addr = paging_get_physical_in(pml4, page_base);
             if (phys_addr == 0) {
+                kwarn("elf_load: paging_get_physical_in returned 0");
                 return NYOTA_ENOMEM;
             }
 
             void *target_ptr = (void *)(phys_addr + page_offset);
             if (nyotafs_read_file(fs, &inode, src_offset, target_ptr, chunk) != (int)chunk) {
+                kwarn("elf_load: read_file segment chunk failed");
                 return NYOTA_EIO;
             }
 

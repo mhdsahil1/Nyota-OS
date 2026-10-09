@@ -30,6 +30,7 @@ void interrupt_unregister_handler(uint8_t vector) {
 
 #include "scheduler.h"
 #include "signal.h"
+#include "lapic.h"
 
 interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame) {
     if (!frame) return NULL;
@@ -45,6 +46,8 @@ interrupt_frame_t *interrupt_dispatch(interrupt_frame_t *frame) {
     /* If this was a hardware IRQ (32..47), acknowledge via PIC EOI */
     if (vec >= IRQ_BASE_VECTOR && vec < (IRQ_BASE_VECTOR + IRQ_COUNT)) {
         pic_send_eoi((uint8_t)(vec - IRQ_BASE_VECTOR));
+    } else if (vec >= LAPIC_TIMER_VECTOR && vec <= 0x5F && lapic_is_enabled()) {
+        lapic_send_eoi();
     }
 
     /* If scheduler is running, perform scheduling & context switch if needed */
