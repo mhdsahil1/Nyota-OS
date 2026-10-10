@@ -110,7 +110,10 @@ void heap_init(void) {
 /* ── kmalloc & kfree ──────────────────────────────────────────────────────── */
 
 static void *kmalloc_internal(size_t size) {
-    if (size == 0) return NULL;
+    if (size == 0 || size > 64 * 1024 * 1024ULL) return NULL;
+
+    /* Check integer overflow */
+    if (size > (size_t)-HEAP_ALIGNMENT) return NULL;
 
     /* Align requested size to 16 bytes */
     size_t aligned_size = (size + (HEAP_ALIGNMENT - 1)) & ~(HEAP_ALIGNMENT - 1);
@@ -161,7 +164,20 @@ void *kmalloc(size_t size) {
 static void kfree_internal(void *ptr) {
     if (!ptr) return;
 
+    /* Bounds check: pointer must lie within heap virtual range */
+    uint64_t p = (uint64_t)ptr;
+    if (p < heap_start_addr + sizeof(heap_block_t) || p >= heap_end_addr) {
+        kwarn("kfree: pointer out of heap bounds");
+        return;
+    }
+
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - sizeof(heap_block_t));
+
+    /* Double-free detection */
+    if (block->magic == HEAP_FREE_MAGIC || block->is_free) {
+        kwarn("kfree: double-free detected");
+        return;
+    }
 
     if (block->magic != HEAP_ALLOC_MAGIC) {
         kwarn("kfree: heap corruption or invalid pointer detected");

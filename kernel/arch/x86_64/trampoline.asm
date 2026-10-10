@@ -48,15 +48,15 @@ trampoline_start:
     or eax, (1 << 5)
     mov cr4, eax
 
-    ; Enable Long Mode (LME, bit 8 of EFER MSR 0xC0000080)
+    ; Enable Long Mode (LME, bit 8) and No-Execute (NXE, bit 11) of EFER MSR 0xC0000080
     mov ecx, 0xC0000080
     rdmsr
-    or eax, (1 << 8)
+    or eax, (1 << 8) | (1 << 11)
     wrmsr
 
-    ; Enable Paging (PG, bit 31 of CR0)
+    ; Enable Paging (PG, bit 31) and Write Protect (WP, bit 16) in CR0
     mov eax, cr0
-    or eax, (1 << 31)
+    or eax, (1 << 31) | (1 << 16)
     mov cr0, eax
 
     ; Far jump into 64-bit Long Mode

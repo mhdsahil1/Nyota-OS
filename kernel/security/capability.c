@@ -8,15 +8,15 @@
 
 bool has_capability(struct process *proc, uint64_t cap) {
     if (!proc) return false;
-    /* Root process (UID 0) has all capabilities */
-    if (proc->uid == 0) return true;
+    /* Root process (UID 0 or EUID 0) has all capabilities */
+    if (proc->uid == 0 || proc->euid == 0) return true;
     return (proc->capabilities & cap) == cap;
 }
 
 bool can_signal_process(struct process *sender, struct process *target) {
     if (!sender || !target) return false;
     /* Root or CAP_KILL can signal any process */
-    if (sender->uid == 0 || has_capability(sender, CAP_KILL)) return true;
+    if (sender->uid == 0 || sender->euid == 0 || has_capability(sender, CAP_KILL)) return true;
     /* Processes with identical UID can signal each other */
-    return sender->uid == target->uid;
+    return (sender->uid == target->uid || sender->euid == target->uid);
 }

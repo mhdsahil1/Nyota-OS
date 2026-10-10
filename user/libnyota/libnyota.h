@@ -226,10 +226,41 @@ int kill(int pid, int sig);
 int signal(int sig, void (*handler)(int));
 uint32_t getuid(void);
 int setuid(uint32_t uid);
+uint32_t geteuid(void);
+int seteuid(uint32_t euid);
 uint32_t getgid(void);
 int setgid(uint32_t gid);
+uint32_t getegid(void);
+int setegid(uint32_t egid);
 int chmod(const char *path, uint32_t mode);
 int chown(const char *path, uint32_t uid, uint32_t gid);
+
+/* Syscall Filter Sandbox Constants & API */
+#define SYSCALL_FILTER_OFF       0
+#define SYSCALL_FILTER_ALLOW     1
+#define SYSCALL_FILTER_DENY      2
+int set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1);
+
+/* Security Audit Logging Constants & API */
+#define AUDIT_SEV_INFO    0
+#define AUDIT_SEV_WARN    1
+#define AUDIT_SEV_DENIED  2
+#define AUDIT_SEV_ALERT   3
+
+#define AUDIT_CMD_READ    1
+#define AUDIT_CMD_LOG     2
+#define AUDIT_CMD_CLEAR   3
+
+typedef struct {
+    uint64_t timestamp;
+    uint32_t pid;
+    uint32_t uid;
+    uint8_t  severity;
+    char     category[16];
+    char     message[80];
+} audit_event_t;
+
+int64_t audit_log_op(uint32_t cmd, void *buf, size_t count);
 
 #define IPC_CREAT       01000
 #define IPC_EXCL        02000

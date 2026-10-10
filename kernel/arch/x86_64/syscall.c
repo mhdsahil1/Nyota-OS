@@ -72,7 +72,6 @@ bool user_validate_string(const char *ustr, size_t max_len) {
 /* ── User Memory Validation ───────────────────────────────────────────────── */
 
 bool user_validate_pointer(const void *uptr, size_t len, bool write) {
-    (void)write;
     if (!uptr) return false;
 
     uint64_t addr = (uint64_t)uptr;
@@ -84,6 +83,7 @@ bool user_validate_pointer(const void *uptr, size_t len, bool write) {
     if (addr + len > USER_SPACE_END || addr + len < addr) {
         return false;
     }
+    if (len == 0) return true;
 
     process_t *proc = process_get_current();
     page_table_t *pml4 = proc ? (page_table_t *)proc->cr3 : NULL;
@@ -96,7 +96,11 @@ bool user_validate_pointer(const void *uptr, size_t len, bool write) {
     uint64_t end_page = PAGE_ALIGN_UP(addr + len);
 
     for (uint64_t p = start_page; p < end_page; p += PAGE_SIZE) {
-        if (paging_get_physical_in(pml4, p) == 0) {
+        uint64_t flags = paging_get_flags_in(pml4, p);
+        if (!(flags & PAGE_PRESENT) || !(flags & PAGE_USER)) {
+            return false;
+        }
+        if (write && !(flags & PAGE_WRITABLE)) {
             return false;
         }
     }
@@ -550,14 +554,33 @@ static int64_t sys_handle_getuid(void) {
     return curr ? curr->uid : 0;
 }
 
+static int64_t sys_handle_geteuid(void) {
+    process_t *curr = process_get_current();
+    return curr ? curr->euid : 0;
+}
+
 static int64_t sys_handle_setuid(uint32_t uid) {
     process_t *curr = process_get_current();
     if (!curr) return SYS_ERR_EBADF;
 
-    if (curr->uid != 0 && curr->uid != uid) {
+    if (curr->uid != 0 && curr->euid != 0 && !has_capability(curr, CAP_SETUID) && curr->uid != uid) {
+        audit_log_event(AUDIT_SEV_DENIED, "CRED", curr->pid, curr->euid, "unauthorized setuid");
         return SYS_ERR_EPERM;
     }
     curr->uid = uid;
+    curr->euid = uid;
+    return 0;
+}
+
+static int64_t sys_handle_seteuid(uint32_t euid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    if (curr->uid != 0 && curr->euid != 0 && !has_capability(curr, CAP_SETUID) && curr->uid != euid) {
+        audit_log_event(AUDIT_SEV_DENIED, "CRED", curr->pid, curr->euid, "unauthorized seteuid");
+        return SYS_ERR_EPERM;
+    }
+    curr->euid = euid;
     return 0;
 }
 
@@ -566,14 +589,57 @@ static int64_t sys_handle_getgid(void) {
     return curr ? curr->gid : 0;
 }
 
+static int64_t sys_handle_getegid(void) {
+    process_t *curr = process_get_current();
+    return curr ? curr->egid : 0;
+}
+
 static int64_t sys_handle_setgid(uint32_t gid) {
     process_t *curr = process_get_current();
     if (!curr) return SYS_ERR_EBADF;
 
-    if (curr->uid != 0 && curr->gid != gid) {
+    if (curr->uid != 0 && curr->euid != 0 && !has_capability(curr, CAP_SETUID) && curr->gid != gid) {
+        audit_log_event(AUDIT_SEV_DENIED, "CRED", curr->pid, curr->euid, "unauthorized setgid");
         return SYS_ERR_EPERM;
     }
     curr->gid = gid;
+    curr->egid = gid;
+    return 0;
+}
+
+static int64_t sys_handle_setegid(uint32_t egid) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    if (curr->uid != 0 && curr->euid != 0 && !has_capability(curr, CAP_SETUID) && curr->gid != egid) {
+        audit_log_event(AUDIT_SEV_DENIED, "CRED", curr->pid, curr->euid, "unauthorized setegid");
+        return SYS_ERR_EPERM;
+    }
+    curr->egid = egid;
+    return 0;
+}
+
+static int64_t sys_handle_set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EBADF;
+
+    if (curr->syscall_filter_locked) {
+        audit_log_event(AUDIT_SEV_DENIED, "SYSCALL", curr->pid, curr->euid, "syscall filter locked");
+        return SYS_ERR_EPERM;
+    }
+
+    if (mode == 0) {
+        curr->syscall_filter_enabled = false;
+        curr->syscall_filter_mode = 0;
+        curr->syscall_filter_mask[0] = 0;
+        curr->syscall_filter_mask[1] = 0;
+    } else {
+        curr->syscall_filter_enabled = true;
+        curr->syscall_filter_mode = mode;
+        curr->syscall_filter_mask[0] = mask0;
+        curr->syscall_filter_mask[1] = mask1;
+        curr->syscall_filter_locked = true;
+    }
     return 0;
 }
 
@@ -1028,7 +1094,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.3.0", 5);
+    memcpy(info.kernel_ver, "1.4.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1677,6 +1743,21 @@ static int64_t sys_handle_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2
 }
 
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    process_t *curr = process_get_current();
+    if (curr && curr->syscall_filter_enabled) {
+        bool bit_set = (num < 128) && ((curr->syscall_filter_mask[num / 64] & (1ULL << (num % 64))) != 0);
+        bool allowed = true;
+        if (curr->syscall_filter_mode == 1 /* Allowlist */) {
+            allowed = bit_set || (num == SYS_EXIT) || (num == SYS_YIELD);
+        } else if (curr->syscall_filter_mode == 2 /* Denylist */) {
+            allowed = !bit_set;
+        }
+        if (!allowed) {
+            audit_log_event(AUDIT_SEV_DENIED, "SYSCALL", curr->pid, curr->euid, "filtered syscall denied");
+            return SYS_ERR_EPERM;
+        }
+    }
+
     switch (num) {
         case SYS_WRITE:     return sys_handle_write(a1, a2, a3);
         case SYS_EXIT:      return sys_handle_exit((int)a1);
@@ -1757,6 +1838,12 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_STATVFS:           return sys_handle_statvfs(a1, a2);
         case SYS_NET_CTRL:          return sys_handle_net_ctrl((uint32_t)a1, a2, a3);
         case SYS_FIREWALL_OP:       return sys_handle_firewall_op((uint32_t)a1, a2, a3, a4);
+        case SYS_GETEUID:           return sys_handle_geteuid();
+        case SYS_GETEGID:           return sys_handle_getegid();
+        case SYS_SETEUID:           return sys_handle_seteuid((uint32_t)a1);
+        case SYS_SETEGID:           return sys_handle_setegid((uint32_t)a1);
+        case SYS_SET_SYSCALL_FILTER: return sys_handle_set_syscall_filter((uint8_t)a1, a2, a3);
+        case SYS_AUDIT_LOG:         return kernel_audit_log_op((uint32_t)a1, (void *)a2, (size_t)a3);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2615,3 +2702,90 @@ int64_t sys_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg
     );
     return ret;
 }
+
+uint32_t sys_geteuid(void) {
+    uint32_t ret;
+    __asm__ volatile (
+        "mov $79, %%rax\n"
+        "int $0x80\n"
+        "mov %%eax, %0\n"
+        : "=r"(ret)
+        :
+        : "rax", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+uint32_t sys_getegid(void) {
+    uint32_t ret;
+    __asm__ volatile (
+        "mov $80, %%rax\n"
+        "int $0x80\n"
+        "mov %%eax, %0\n"
+        : "=r"(ret)
+        :
+        : "rax", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_seteuid(uint32_t euid) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $81, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)euid)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_setegid(uint32_t egid) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $82, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)egid)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $83, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)mode), "r"(mask0), "r"(mask1)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $84, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)cmd), "r"((uint64_t)buf), "r"((uint64_t)count)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+

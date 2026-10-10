@@ -128,7 +128,7 @@ void *shm_at(int shmid, uint64_t addr, int flags) {
     for (size_t p = 0; p < seg->page_count; p++) {
         uint64_t page_vaddr = vaddr + (p * PAGE_SIZE);
         paging_map_page_in(pml4, page_vaddr, (uint64_t)seg->phys_pages[p],
-                           PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+                           PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX);
         paging_invlpg(page_vaddr);
     }
 

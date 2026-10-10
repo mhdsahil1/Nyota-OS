@@ -628,7 +628,7 @@ int main(int argc, char **argv) {
     printf("========================================\n");
     printf("              NYOTA OS                  \n");
     printf("========================================\n");
-    printf("Kernel       : v1.3.0\n");
+    printf("Kernel       : v1.4.0\n");
     printf("Architecture : x86_64\n\n");
     printf("[INIT] Starting userspace supervisor\n\n");
 

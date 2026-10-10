@@ -240,7 +240,11 @@ static void scan_directory(uint64_t dir_inode, uint64_t parent_inode, const char
             add_dir_entry(dir_inode, child_inode, entry->d_name, NYOTA_FT_DIR);
             scan_directory(child_inode, dir_inode, full_path);
         } else if (S_ISREG(st.st_mode)) {
-            uint64_t child_inode = alloc_inode(NYOTA_MODE_FILE | 0755);
+            uint32_t fmode = 0755;
+            if (strcmp(entry->d_name, "shadow") == 0) {
+                fmode = 0600;
+            }
+            uint64_t child_inode = alloc_inode(NYOTA_MODE_FILE | fmode);
             add_dir_entry(dir_inode, child_inode, entry->d_name, NYOTA_FT_FILE);
             populate_file(child_inode, full_path);
         }

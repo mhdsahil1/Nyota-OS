@@ -218,3 +218,30 @@ uint64_t paging_get_physical_in(page_table_t *pml4, uint64_t virt) {
 uint64_t paging_get_physical(uint64_t virt) {
     return paging_get_physical_in(kernel_pml4, virt);
 }
+
+uint64_t paging_get_flags_in(page_table_t *pml4, uint64_t virt) {
+    if (!pml4) return 0;
+
+    uint64_t pml4_i = PML4_INDEX(virt);
+    uint64_t pdpt_i = PDPT_INDEX(virt);
+    uint64_t pd_i   = PD_INDEX(virt);
+    uint64_t pt_i   = PT_INDEX(virt);
+
+    if (!(pml4->entries[pml4_i] & PAGE_PRESENT)) return 0;
+    page_table_t *pdpt = (page_table_t *)(pml4->entries[pml4_i] & PAGE_ENTRY_ADDR_MASK);
+
+    if (!(pdpt->entries[pdpt_i] & PAGE_PRESENT)) return 0;
+    page_table_t *pd = (page_table_t *)(pdpt->entries[pdpt_i] & PAGE_ENTRY_ADDR_MASK);
+
+    if (!(pd->entries[pd_i] & PAGE_PRESENT)) return 0;
+
+    /* Handle 2MB huge page */
+    if (pd->entries[pd_i] & PAGE_HUGE) {
+        return pd->entries[pd_i] & ~PAGE_ENTRY_ADDR_MASK;
+    }
+
+    page_table_t *pt = (page_table_t *)(pd->entries[pd_i] & PAGE_ENTRY_ADDR_MASK);
+    if (!(pt->entries[pt_i] & PAGE_PRESENT)) return 0;
+
+    return pt->entries[pt_i] & ~PAGE_ENTRY_ADDR_MASK;
+}

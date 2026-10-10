@@ -72,15 +72,15 @@ stage2_entry:
     or   eax, (1 << 5)
     mov  cr4, eax
 
-    ; 9. Enable Long Mode (LME, bit 8 of EFER MSR 0xC0000080)
+    ; 9. Enable Long Mode (LME, bit 8) and No-Execute (NXE, bit 11) of EFER MSR 0xC0000080
     mov  ecx, 0xC0000080
     rdmsr
-    or   eax, (1 << 8)
+    or   eax, (1 << 8) | (1 << 11)
     wrmsr
 
-    ; 10. Enable Paging (PG, bit 31) and Protected Mode (PE, bit 0) in CR0
+    ; 10. Enable Paging (PG, bit 31), Write Protect (WP, bit 16), and Protected Mode (PE, bit 0) in CR0
     mov  eax, cr0
-    or   eax, (1 << 31) | (1 << 0)
+    or   eax, (1 << 31) | (1 << 16) | (1 << 0)
     mov  cr0, eax
 
     ; 11. Far jump into 64-bit code segment

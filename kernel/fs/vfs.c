@@ -16,6 +16,8 @@
 #include "kernel.h"
 #include "drivers/tty.h"
 #include "storage/cache.h"
+#include "security/security.h"
+#include "security/capability.h"
 
 static nyota_fs_t root_filesystem;
 static bool root_mounted = false;
@@ -138,7 +140,13 @@ int vfs_init_process_fds(file_t **fds) {
 int vfs_alloc_fd(file_t **fds, file_t *f) {
     if (!fds || !f) return NYOTA_EINVAL;
 
-    for (int i = 0; i < MAX_PROCESS_FDS; i++) {
+    process_t *curr = process_get_current();
+    int limit = MAX_PROCESS_FDS;
+    if (curr && curr->max_open_files > 0 && (int)curr->max_open_files < MAX_PROCESS_FDS) {
+        limit = (int)curr->max_open_files;
+    }
+
+    for (int i = 0; i < limit; i++) {
         if (fds[i] == NULL) {
             fds[i] = f;
             return i;
@@ -305,8 +313,17 @@ int vfs_open(const char *path, int flags, int mode) {
 
     if (res != 0) {
         if (flags & O_CREAT) {
-            res = nyotafs_create_file(&root_filesystem, use_path, 0755, &inode_num);
+            uint32_t create_mode = (mode == 0) ? 0644 : (mode & 0777);
+            res = nyotafs_create_file(&root_filesystem, use_path, create_mode, &inode_num);
             if (res != 0) return NYOTA_ENOENT;
+            if (curr) {
+                nyota_inode_t new_inode;
+                if (nyotafs_read_inode(&root_filesystem, inode_num, &new_inode) == 0) {
+                    new_inode.uid = curr->euid;
+                    new_inode.gid = curr->egid;
+                    nyotafs_write_inode(&root_filesystem, inode_num, &new_inode);
+                }
+            }
         } else {
             return NYOTA_ENOENT;
         }
@@ -318,7 +335,7 @@ int vfs_open(const char *path, int flags, int mode) {
     }
 
     /* Permission checks */
-    if (curr->uid != 0) {
+    if (curr && curr->uid != 0 && curr->euid != 0) {
         bool need_read = ((flags & O_ACCMODE) == O_RDONLY) || ((flags & O_ACCMODE) == O_RDWR);
         bool need_write = ((flags & O_ACCMODE) == O_WRONLY) || ((flags & O_ACCMODE) == O_RDWR) || (flags & O_TRUNC);
 
@@ -327,18 +344,19 @@ int vfs_open(const char *path, int flags, int mode) {
             if (strncmp(path, "/bin/", 5) == 0 || strncmp(path, "bin/", 4) == 0 ||
                 strncmp(path, "/etc/", 5) == 0 || strncmp(path, "etc/", 4) == 0 ||
                 strncmp(path, "/kernel", 7) == 0 || strncmp(path, "kernel", 6) == 0) {
+                audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized sysdir write");
                 return NYOTA_EACCES;
             }
         }
 
         uint32_t perms = inode.mode & 0777;
         bool allowed = false;
-        if (curr->uid == inode.uid) {
+        if (curr->euid == inode.uid || curr->uid == inode.uid) {
             bool ok = true;
             if (need_read && !(perms & 0400)) ok = false;
             if (need_write && !(perms & 0200)) ok = false;
             if (ok) allowed = true;
-        } else if (curr->gid == inode.gid) {
+        } else if (curr->egid == inode.gid || curr->gid == inode.gid) {
             bool ok = true;
             if (need_read && !(perms & 0040)) ok = false;
             if (need_write && !(perms & 0020)) ok = false;
@@ -351,6 +369,7 @@ int vfs_open(const char *path, int flags, int mode) {
         }
 
         if (!allowed) {
+            audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "file access denied");
             return NYOTA_EACCES;
         }
     }
@@ -715,8 +734,9 @@ int vfs_chmod(const char *path, uint32_t mode) {
         return NYOTA_EIO;
     }
 
-    /* Only owner or root (UID 0) can chmod */
-    if (curr->uid != 0 && curr->uid != inode.uid) {
+    /* Only owner or root (UID 0 / EUID 0) can chmod */
+    if (curr->uid != 0 && curr->euid != 0 && curr->uid != inode.uid && curr->euid != inode.uid) {
+        audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized chmod");
         return NYOTA_EPERM;
     }
 
@@ -733,8 +753,9 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
     process_t *curr = process_get_current();
     if (!curr) return NYOTA_EBADF;
 
-    /* Only root (UID 0) can chown arbitrarily */
-    if (curr->uid != 0) {
+    /* Only root (UID 0 / EUID 0) or CAP_CHOWN can chown arbitrarily */
+    if (curr->uid != 0 && curr->euid != 0 && !has_capability(curr, CAP_CHOWN)) {
+        audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized chown");
         return NYOTA_EPERM;
     }
 
@@ -817,6 +838,16 @@ int vfs_unlink(const char *path) {
     char resolved[128];
     int nerr = vfs_normalize_path(path, resolved, sizeof(resolved));
     const char *use_path = (nerr == NYOTA_OK) ? resolved : path;
+
+    process_t *curr = process_get_current();
+    if (curr && curr->uid != 0 && curr->euid != 0) {
+        if (strncmp(use_path, "/bin/", 5) == 0 || strncmp(use_path, "bin/", 4) == 0 ||
+            strncmp(use_path, "/etc/", 5) == 0 || strncmp(use_path, "etc/", 4) == 0 ||
+            strncmp(use_path, "/kernel", 7) == 0 || strncmp(use_path, "kernel", 6) == 0) {
+            audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized unlink");
+            return NYOTA_EACCES;
+        }
+    }
 
     /* Separate directory and filename */
     const char *last_slash = NULL;

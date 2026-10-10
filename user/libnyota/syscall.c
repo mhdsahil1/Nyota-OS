@@ -200,6 +200,30 @@ int chown(const char *path, uint32_t uid, uint32_t gid) {
     return (int)syscall3(35, (uint64_t)path, (uint64_t)uid, (uint64_t)gid);
 }
 
+uint32_t geteuid(void) {
+    return (uint32_t)syscall0(79);
+}
+
+int seteuid(uint32_t euid) {
+    return (int)syscall1(81, (uint64_t)euid);
+}
+
+uint32_t getegid(void) {
+    return (uint32_t)syscall0(80);
+}
+
+int setegid(uint32_t egid) {
+    return (int)syscall1(82, (uint64_t)egid);
+}
+
+int set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1) {
+    return (int)syscall3(83, (uint64_t)mode, mask0, mask1);
+}
+
+int64_t audit_log_op(uint32_t cmd, void *buf, size_t count) {
+    return syscall3(84, (uint64_t)cmd, (uint64_t)buf, (uint64_t)count);
+}
+
 int shm_get(uint32_t key, size_t size, int flags) {
     return (int)syscall3(36, (uint64_t)key, (uint64_t)size, (uint64_t)flags);
 }

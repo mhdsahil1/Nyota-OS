@@ -119,10 +119,12 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
 
         has_loadable_segment = true;
 
-        /* Determine page permission flags */
+        /* Determine page permission flags (enforcing W^X and NX) */
         uint64_t page_flags = PAGE_PRESENT | PAGE_USER;
         if (phdr.p_flags & PF_W) {
-            page_flags |= PAGE_WRITABLE;
+            page_flags |= PAGE_WRITABLE | PAGE_NX;
+        } else if (!(phdr.p_flags & PF_X)) {
+            page_flags |= PAGE_NX;
         }
 
         uint64_t vstart = PAGE_ALIGN_DOWN(phdr.p_vaddr);
@@ -145,7 +147,7 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
                 }
             } else if (phdr.p_flags & PF_W) {
                 /* Update flags if segment requires write */
-                paging_map_page_in(pml4, page, phys, page_flags | PAGE_WRITABLE);
+                paging_map_page_in(pml4, page, phys, page_flags | PAGE_WRITABLE | PAGE_NX);
             }
         }
 

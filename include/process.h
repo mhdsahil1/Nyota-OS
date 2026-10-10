@@ -45,7 +45,15 @@ typedef struct process {
 
     uint32_t uid;
     uint32_t gid;
+    uint32_t euid;
+    uint32_t egid;
     uint64_t capabilities;
+
+    /* Syscall Filtering Sandbox */
+    bool syscall_filter_enabled;
+    uint8_t syscall_filter_mode; /* 0 = none, 1 = allowlist, 2 = denylist */
+    uint64_t syscall_filter_mask[2]; /* 128-bit filter mask */
+    bool syscall_filter_locked;
 
     /* Resource limits */
     uint64_t max_memory;

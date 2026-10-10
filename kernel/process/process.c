@@ -286,7 +286,7 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
         memcpy(code_phys, code_blob, copy_sz);
     }
 
-    paging_map_page_in(pml4, USER_CODE_BASE, (uint64_t)code_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+    paging_map_page_in(pml4, USER_CODE_BASE, (uint64_t)code_phys, PAGE_PRESENT | PAGE_USER);
 
     /* Map stack pages */
     uint64_t stack_base = USER_STACK_TOP - USER_STACK_SIZE;
@@ -297,7 +297,7 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
             return NULL;
         }
         memset(stack_phys, 0, PAGE_SIZE);
-        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX);
     }
 
     proc->entry_point = entry_point ? entry_point : USER_CODE_BASE;
@@ -427,7 +427,7 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
             return NULL;
         }
         memset(stack_phys, 0, PAGE_SIZE);
-        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+        paging_map_page_in(pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX);
     }
 
     /* Load ELF program segments into process address space */
@@ -482,9 +482,16 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
     /* Inherit credentials, permissions, working dir & resource limits */
     if (curr && curr->pid > 0) {
         process_add_child(curr, proc);
-        proc->uid = curr->uid;
-        proc->gid = curr->gid;
-        proc->capabilities = curr->capabilities;
+        proc->uid = curr->euid;
+        proc->gid = curr->egid;
+        proc->euid = curr->euid;
+        proc->egid = curr->egid;
+        proc->capabilities = (curr->euid == 0) ? curr->capabilities : 0;
+        proc->syscall_filter_enabled = curr->syscall_filter_enabled;
+        proc->syscall_filter_mode = curr->syscall_filter_mode;
+        proc->syscall_filter_mask[0] = curr->syscall_filter_mask[0];
+        proc->syscall_filter_mask[1] = curr->syscall_filter_mask[1];
+        proc->syscall_filter_locked = curr->syscall_filter_locked;
         proc->max_memory = curr->max_memory ? curr->max_memory : (64 * 1024 * 1024ULL);
         proc->max_open_files = curr->max_open_files ? curr->max_open_files : MAX_PROCESS_FDS;
         proc->max_processes = curr->max_processes ? curr->max_processes : 16;
@@ -506,7 +513,14 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
         proc->parent_pid = 0;
         proc->uid = 0;
         proc->gid = 0;
+        proc->euid = 0;
+        proc->egid = 0;
         proc->capabilities = 0xFFFFFFFFFFFFFFFFULL;
+        proc->syscall_filter_enabled = false;
+        proc->syscall_filter_mode = 0;
+        proc->syscall_filter_mask[0] = 0;
+        proc->syscall_filter_mask[1] = 0;
+        proc->syscall_filter_locked = false;
         proc->max_memory = 64 * 1024 * 1024ULL;
         proc->max_open_files = MAX_PROCESS_FDS;
         proc->max_processes = 16;
@@ -615,7 +629,7 @@ int process_execve(process_t *proc, const char *path, char *const argv[], char *
         void *stack_phys = pmm_alloc_page();
         if (!stack_phys) return NYOTA_ENOMEM;
         memset(stack_phys, 0, PAGE_SIZE);
-        paging_map_page_in(new_pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE);
+        paging_map_page_in(new_pml4, sp, (uint64_t)stack_phys, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX);
     }
 
     uint64_t entry_point = 0;

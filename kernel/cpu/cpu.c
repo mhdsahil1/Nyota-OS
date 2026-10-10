@@ -65,6 +65,20 @@ void cpu_init(void) {
         cr4 |= (1ULL << 10); /* OSXMMEXCPT: unmasked SSE FP exceptions */
         __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4));
     }
+
+    /* 5. Enable No-Execute (NX) in IA32_EFER MSR (0xC0000080) bit 11 */
+    if (cpu_info.has_nx) {
+        uint32_t low, high;
+        __asm__ volatile ("rdmsr" : "=a"(low), "=d"(high) : "c"(0xC0000080));
+        low |= (1 << 11); /* EFER.NXE */
+        __asm__ volatile ("wrmsr" : : "c"(0xC0000080), "a"(low), "d"(high));
+    }
+
+    /* 6. Enforce Write-Protect (WP, bit 16 of CR0) */
+    uint64_t cr0_wp;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0_wp));
+    cr0_wp |= (1ULL << 16); /* CR0.WP */
+    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0_wp));
 }
 
 const cpu_info_t *cpu_get_info(void) {

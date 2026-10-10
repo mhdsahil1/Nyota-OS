@@ -13,7 +13,42 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.3.0** is a bootable x86_64 hobby operating system featuring an advanced networking subsystem (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v1.4.0** is a bootable x86_64 hobby operating system featuring a comprehensive security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 14: Security Architecture & Kernel Hardening
+
+Phase 14 establishes a comprehensive security architecture and kernel hardening framework for Nyota OS:
+- **Hardware Memory Hardening & $W \oplus X$ Policy**:
+  - `EFER.NXE` (No-Execute) hardware feature enabled via MSR `0xC0000080` in Stage 2 bootloader, AP trampoline, and CPU setup.
+  - `CR0.WP` (Write Protect) bit 16 active across all cores to prevent supervisor writes to read-only memory.
+  - Strict $W \oplus X$ enforcement: User stack, data, heap, and shared memory are non-executable (`PAGE_NX`); executable code is non-writable (`!PAGE_WRITABLE`).
+- **User & Group Credentials (`uid`, `euid`, `gid`, `egid`)**:
+  - Full process credential tracking supporting real and effective UIDs and GIDs.
+  - Syscalls: `getuid`, `setuid`, `getgid`, `setgid`, `geteuid`, `getegid`, `seteuid`, `setegid`.
+  - Non-root processes are strictly prevented from unauthorized privilege escalation (`-EPERM`).
+  - Privilege dropping in `logind` before spawning user shells (`UID 1000`, `EUID 1000`).
+- **File Permissions & Access Control**:
+  - VFS inode permission enforcement matching owner, group, and other mode bits against calling process EUID/EGID.
+  - Discretionary root bypass for EUID 0.
+  - Protected credential files: `/etc/shadow` configured with mode `0600` (inaccessible to non-root).
+  - Protected system directories: non-root deletion blocked under `/bin/`, `/etc/`, and `/kernel`.
+  - Userland utilities: `/bin/chmod`, `/bin/chown`, `/bin/id`, `/bin/whoami`.
+- **Capability-Based Security Boundaries**:
+  - Discrete 64-bit capability masks authorizing privileged operations: `CAP_NET_ADMIN`, `CAP_FIREWALL`, `CAP_SYS_ADMIN`, `CAP_KILL`, `CAP_SETUID`, `CAP_CHOWN`, `CAP_SYS_TIME`, `CAP_AUDIT`, `CAP_DEV_RAW`.
+- **Syscall Filtering Sandbox**:
+  - Per-process configurable syscall filtering (`SYS_SET_SYSCALL_FILTER` 83) supporting locked allowlist and denylist policies.
+- **Credential & Authentication Security**:
+  - Secure SHA-256 password hashing in `/etc/shadow`.
+  - Constant-time comparison (`crypto_memcmp`) to defeat timing side-channel attacks.
+- **Structured Security Audit Subsystem**:
+  - Circular in-memory audit log ring buffer (capacity 64 events) capturing denied operations, permission rejections, and authentication failures.
+  - Privileged extraction via `SYS_AUDIT_LOG` (84) and `/bin/auditlog` CLI tool.
+- **Automated Verification**:
+  - `/bin/sectest`: 19/19 kernel hardening unit tests passing.
+  - `tools/test_phase14.py`: 33/33 end-to-end security regression tests passing.
+  - `tools/test_security.py`: 25/25 baseline tests 100% passing.
+
+See [docs/security-architecture.md](docs/security-architecture.md), [docs/threat-model.md](docs/threat-model.md), [docs/memory-protection.md](docs/memory-protection.md), [docs/access-control.md](docs/access-control.md), and [docs/security-testing.md](docs/security-testing.md) for full architectural documentation.
 
 ## Phase 13: Advanced Networking & Network Security
 
@@ -86,16 +121,17 @@ The desktop starts from PID 1's service configuration after system services. A f
 ![Nyota OS desktop running Terminal and About](assets/nyota-desktop.png)
 
 Build with `make all`, launch with `make run`, and run test suites:
+- `python tools/test_phase14.py` (Phase 14 Security Architecture & Kernel Hardening test)
 - `python tools/test_phase13.py` (Phase 13 Advanced Networking & Network Security test)
 - `python tools/test_storage.py` (Phase 12 Storage, AHCI, NVMe, MBR/GPT, lspci, lsblk, disktest)
 - `python tools/test_smp.py` (SMP test across `-smp 1, 2, 4, 8`)
-- `python tools/test_security.py` (Security & IPC test)
+- `python tools/test_security.py` (Security & IPC baseline test)
 - `python tools/test_phase10.py` (GUI & desktop test)
 - `python tools/test_network.py` (Networking test)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-13%3A%20Advanced%20Networking%20%26%20Security-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v1.3.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-14%3A%20Security%20Architecture%20%26%20Kernel%20Hardening-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v1.4.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">

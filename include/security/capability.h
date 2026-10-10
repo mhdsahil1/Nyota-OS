@@ -16,6 +16,10 @@
 #define CAP_KILL           (1ULL << 4)  /* Signal processes with different UID */
 #define CAP_SETUID         (1ULL << 5)  /* Change process UID/GID */
 #define CAP_CHOWN          (1ULL << 6)  /* Change file ownership */
+#define CAP_FIREWALL       (1ULL << 7)  /* Firewall rule manipulation */
+#define CAP_SYS_TIME       (1ULL << 8)  /* Set RTC / system clock */
+#define CAP_AUDIT          (1ULL << 9)  /* Security audit logging administration */
+#define CAP_DEV_RAW        (1ULL << 10) /* Raw block/hardware device operations */
 #define CAP_ALL            0xFFFFFFFFFFFFFFFFULL
 
 struct process;

@@ -227,7 +227,13 @@ USER_BINARIES := \
     fs/root/bin/httpd       \
     fs/root/bin/nyfw        \
     fs/root/bin/netinfo     \
-    fs/root/bin/ip
+    fs/root/bin/ip          \
+    fs/root/bin/chmod       \
+    fs/root/bin/chown       \
+    fs/root/bin/id          \
+    fs/root/bin/whoami      \
+    fs/root/bin/auditlog    \
+    fs/root/bin/sectest
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4

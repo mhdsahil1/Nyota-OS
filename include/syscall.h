@@ -89,6 +89,12 @@
 #define SYS_STATVFS           76
 #define SYS_NET_CTRL          77
 #define SYS_FIREWALL_OP       78
+#define SYS_GETEUID           79
+#define SYS_GETEGID           80
+#define SYS_SETEUID           81
+#define SYS_SETEGID           82
+#define SYS_SET_SYSCALL_FILTER 83
+#define SYS_AUDIT_LOG         84
 
 /* SMP Information Data Structures */
 typedef struct {
@@ -262,5 +268,11 @@ int64_t sys_blk_read(const char *dev_name, uint64_t lba, uint32_t count, void *b
 int64_t sys_blk_write(const char *dev_name, uint64_t lba, uint32_t count, const void *buf);
 int64_t sys_blk_flush(const char *dev_name);
 int64_t sys_statvfs(const char *path, statvfs_t *buf);
+uint32_t sys_geteuid(void);
+int64_t sys_seteuid(uint32_t euid);
+uint32_t sys_getegid(void);
+int64_t sys_setegid(uint32_t egid);
+int64_t sys_set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1);
+int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count);
 
 #endif /* NYOTA_SYSCALL_H */
