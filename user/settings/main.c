@@ -6,8 +6,8 @@
 #include "libnyota.h"
 #include "gui.h"
 
-#define SETTINGS_WIDTH   480
-#define SETTINGS_HEIGHT  360
+#define SETTINGS_WIDTH   520
+#define SETTINGS_HEIGHT  380
 
 static const char *tabs[] = {
     "Appearance",
@@ -114,28 +114,98 @@ int main(int argc, char **argv) {
                 gui_draw_text(win, content_x, content_y, "Protocol: Standard 3-Byte Packet Streaming", COLOR_TEXT_MUTED, 0);
                 break;
 
-            case 3: /* Network */
-                gui_draw_text(win, content_x, content_y, "Interface : eth0 [Intel 82540EM (e1000)]", COLOR_TEXT_PRIMARY, 0);
-                content_y += 20;
-                gui_draw_text(win, content_x, content_y, "IP Address: 10.0.2.15 / 255.255.255.0", COLOR_TEXT_MUTED, 0);
-                content_y += 20;
-                gui_draw_text(win, content_x, content_y, "Gateway   : 10.0.2.2", COLOR_TEXT_MUTED, 0);
-                content_y += 20;
-                gui_draw_text(win, content_x, content_y, "MAC       : 52:54:00:12:34:56", COLOR_TEXT_MUTED, 0);
-                content_y += 20;
-                gui_draw_text(win, content_x, content_y, "Status    : UP, BROADCAST, RUNNING", COLOR_SUCCESS, 0);
+            case 3: { /* Network */
+                size_t if_count = (size_t)sys_net_ctrl(NET_CTRL_GET_COUNT, 0, 0);
+                netdev_info_t dev_info;
+                memset(&dev_info, 0, sizeof(dev_info));
+
+                /* Find primary non-loopback device or first device */
+                for (size_t i = 0; i < if_count; i++) {
+                    netdev_info_t temp;
+                    if (sys_net_ctrl(NET_CTRL_GET_DEV, (uint64_t)i, (uint64_t)&temp) == 0) {
+                        if (!(temp.flags & 0x04) || if_count == 1) {
+                            memcpy(&dev_info, &temp, sizeof(dev_info));
+                            break;
+                        }
+                    }
+                }
+
+                char line[96];
+                snprintf(line, sizeof(line), "Interface : %s (e1000/Intel Gigabit)", dev_info.name[0] ? dev_info.name : "eth0");
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_PRIMARY, 0);
+                content_y += 18;
+
+                const char *hex_digits = "0123456789abcdef";
+                char mac_str[24];
+                snprintf(mac_str, sizeof(mac_str), "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c",
+                         hex_digits[(dev_info.mac[0] >> 4) & 0xF], hex_digits[dev_info.mac[0] & 0xF],
+                         hex_digits[(dev_info.mac[1] >> 4) & 0xF], hex_digits[dev_info.mac[1] & 0xF],
+                         hex_digits[(dev_info.mac[2] >> 4) & 0xF], hex_digits[dev_info.mac[2] & 0xF],
+                         hex_digits[(dev_info.mac[3] >> 4) & 0xF], hex_digits[dev_info.mac[3] & 0xF],
+                         hex_digits[(dev_info.mac[4] >> 4) & 0xF], hex_digits[dev_info.mac[4] & 0xF],
+                         hex_digits[(dev_info.mac[5] >> 4) & 0xF], hex_digits[dev_info.mac[5] & 0xF]);
+                snprintf(line, sizeof(line), "MAC Addr  : %s", mac_str);
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                struct in_addr in;
+                in.s_addr = dev_info.ip_addr;
+                char ip_str[32];
+                strncpy(ip_str, inet_ntoa(in), sizeof(ip_str) - 1);
+                in.s_addr = dev_info.netmask;
+                snprintf(line, sizeof(line), "IPv4 Addr : %s / %s", ip_str, inet_ntoa(in));
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                if (dev_info.has_ip6) {
+                    char ip6_str[INET6_ADDRSTRLEN];
+                    inet_ntop(AF_INET6, dev_info.ip6_addr, ip6_str, sizeof(ip6_str));
+                    snprintf(line, sizeof(line), "IPv6 Addr : %s", ip6_str);
+                } else {
+                    snprintf(line, sizeof(line), "IPv6 Addr : none");
+                }
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                in.s_addr = dev_info.gateway;
+                snprintf(line, sizeof(line), "Gateway   : %s", dev_info.gateway ? inet_ntoa(in) : "none");
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                in.s_addr = dev_info.dns;
+                snprintf(line, sizeof(line), "DNS Server: %s", dev_info.dns ? inet_ntoa(in) : "10.0.2.3");
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                snprintf(line, sizeof(line), "Traffic   : RX %llu pkts (%llu B)  TX %llu pkts",
+                         dev_info.rx_packets, dev_info.rx_bytes, dev_info.tx_packets);
+                gui_draw_text(win, content_x, content_y, line, COLOR_TEXT_MUTED, 0);
+                content_y += 18;
+
+                firewall_status_t fw_st;
+                memset(&fw_st, 0, sizeof(fw_st));
+                sys_firewall_op(FW_CMD_GET_STATUS, (uint64_t)&fw_st, 0, 0);
+                snprintf(line, sizeof(line), "Firewall  : %s (%u rules active)",
+                         fw_st.enabled ? "ENABLED" : "DISABLED", fw_st.rule_count);
+                gui_draw_text(win, content_x, content_y, line, fw_st.enabled ? COLOR_SUCCESS : COLOR_WARNING, 0);
+                content_y += 18;
+
+                gui_draw_text(win, content_x, content_y, "Link State: UP, BROADCAST, RUNNING", COLOR_SUCCESS, 0);
                 break;
+            }
 
             case 4: /* System */
-                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.2.0 (Storage & SMP)", COLOR_TITLE_ACTIVE, 0);
+                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.3.0 (Advanced Networking)", COLOR_TITLE_ACTIVE, 0);
                 content_y += 24;
                 gui_draw_text(win, content_x, content_y, "Kernel Architecture : x86_64 Long Mode", COLOR_TEXT_MUTED, 0);
                 content_y += 20;
-                gui_draw_text(win, content_x, content_y, "Security Model      : Ring 0/3 Separation", COLOR_TEXT_MUTED, 0);
+                gui_draw_text(win, content_x, content_y, "Network Security    : Packet Firewall (nyfw)", COLOR_TEXT_MUTED, 0);
                 content_y += 20;
-                gui_draw_text(win, content_x, content_y, "Filesystem          : NyotaFS on ATA Storage", COLOR_TEXT_MUTED, 0);
+                gui_draw_text(win, content_x, content_y, "Protocols Supported : IPv4, IPv6, ICMP/v6, TCP, UDP", COLOR_TEXT_MUTED, 0);
                 content_y += 20;
-                gui_draw_text(win, content_x, content_y, "Multitasking        : Preemptive Round-Robin", COLOR_TEXT_MUTED, 0);
+                gui_draw_text(win, content_x, content_y, "Filesystem          : NyotaFS on ATA/NVMe Storage", COLOR_TEXT_MUTED, 0);
+                content_y += 20;
+                gui_draw_text(win, content_x, content_y, "Multitasking        : Preemptive SMP Round-Robin", COLOR_TEXT_MUTED, 0);
                 break;
         }
 

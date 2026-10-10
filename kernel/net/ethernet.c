@@ -5,6 +5,7 @@
 #include "net/ethernet.h"
 #include "net/arp.h"
 #include "net/ipv4.h"
+#include "net/ipv6.h"
 #include "memory.h"
 #include "heap.h"
 #include "serial.h"
@@ -22,6 +23,13 @@ bool ethernet_mac_is_broadcast(const mac_addr_t mac) {
     return ethernet_mac_equal(mac, ETH_BROADCAST_MAC);
 }
 
+bool ethernet_mac_is_multicast(const mac_addr_t mac) {
+    /* IPv6 Multicast (33:33:xx:xx:xx:xx) or IPv4 Multicast (01:00:5E:xx:xx:xx) */
+    if (mac[0] == 0x33 && mac[1] == 0x33) return true;
+    if (mac[0] == 0x01 && mac[1] == 0x00 && mac[2] == 0x5E) return true;
+    return false;
+}
+
 int ethernet_receive(net_device_t *dev, const void *data, size_t len) {
     if (!dev || !data || len < sizeof(ethernet_header_t)) {
         return -1;
@@ -29,8 +37,10 @@ int ethernet_receive(net_device_t *dev, const void *data, size_t len) {
 
     const ethernet_header_t *eth = (const ethernet_header_t *)data;
 
-    /* Validate destination MAC: accept if broadcast or unicast directed to this adapter */
-    if (!ethernet_mac_is_broadcast(eth->dest) && !ethernet_mac_equal(eth->dest, dev->mac)) {
+    /* Validate destination MAC: accept if broadcast, multicast, or unicast directed to this adapter */
+    if (!ethernet_mac_is_broadcast(eth->dest) &&
+        !ethernet_mac_is_multicast(eth->dest) &&
+        !ethernet_mac_equal(eth->dest, dev->mac)) {
         /* Not directed to us */
         return 0;
     }
@@ -45,6 +55,9 @@ int ethernet_receive(net_device_t *dev, const void *data, size_t len) {
 
         case ETHERTYPE_IPV4:
             return ipv4_receive(dev, payload, payload_len);
+
+        case ETHERTYPE_IPV6:
+            return ipv6_receive(dev, payload, payload_len);
 
         default:
             /* Unsupported EtherType */

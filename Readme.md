@@ -13,7 +13,26 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.2.0** is a bootable x86_64 hobby operating system featuring a modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, TCP/IP networking, and NyotaFS storage.
+**Nyota OS v1.3.0** is a bootable x86_64 hobby operating system featuring an advanced networking subsystem (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 13: Advanced Networking & Network Security
+
+Phase 13 elevates Nyota OS's network capabilities into a reliable, configurable, secure, and production-testable network stack:
+- **Dynamic DHCPv4 Configuration (`/bin/dhclient`)**: Full RFC 2131 client (DISCOVER, OFFER, REQUEST, ACK), transaction-ID validation, parameter request negotiation, dynamic IP/netmask/gateway/DNS configuration, and fallback handling.
+- **Native IPv6 Subsystem**: Full 128-bit address representation, Stateless Address Autoconfiguration (SLAAC) via Modified EUI-64, ICMPv6 Echo Request/Reply, Neighbor Discovery Protocol (NDP with NS/NA), solicited-node multicast, and `33:33:...` Ethernet MAC translation.
+- **TCP Reliability & Flow Control**: Connection retransmission queues with exponential backoff timers, 3-duplicate-ACK Fast Retransmit, receive window advertisement, sequence/ACK boundary validation, and safe TIME_WAIT expiration.
+- **Dynamic Routing Subsystem**: Kernel routing table supporting connected and gateway routes, Longest-Prefix Match (LPM) selection, route additions and removals, and userland management via `/bin/ip route`.
+- **Enhanced DNS Resolver**: Queries `/etc/hosts` local entries, dynamically parses `/etc/resolv.conf`, supports A and AAAA records, and features recursion-bounded compression pointer loop defenses in `/bin/nslookup`.
+- **Packet-Filtering Firewall (`/bin/nyfw`)**: Kernel-level ingress and egress filtering hooks, ordered ruleset evaluation, protocol and port range matching, default policies, execution counters, and root-only configuration enforcement.
+- **Native HTTP/1.1 Client & Server**:
+  - `/bin/httpget`: Streaming multi-packet response buffering, URL parser, DNS/hosts lookup, status line & header extraction.
+  - `/bin/httpd`: Lightweight daemon serving static files from `/var/www`, MIME typing, and strict path-traversal protection (`..` rejection with 403 Forbidden).
+- **Diagnostics & GUI Integration**:
+  - `/bin/netinfo`: Comprehensive network summary diagnostic.
+  - `/bin/ifconfig`: Live hardware MAC, IPv4/prefix, IPv6, MTU, flags, and real RX/TX packet/byte/error/drop statistics.
+  - GUI Network Manager: Integrated Network section in `/bin/settings` reporting live adapter status, addresses, traffic counters, and firewall status.
+
+See [docs/networking.md](docs/networking.md), [docs/ipv6.md](docs/ipv6.md), [docs/firewall.md](docs/firewall.md), and [docs/http.md](docs/http.md) for full architectural documentation.
 
 ## Phase 12: Modern Storage & Hardware Support
 
@@ -67,6 +86,7 @@ The desktop starts from PID 1's service configuration after system services. A f
 ![Nyota OS desktop running Terminal and About](assets/nyota-desktop.png)
 
 Build with `make all`, launch with `make run`, and run test suites:
+- `python tools/test_phase13.py` (Phase 13 Advanced Networking & Network Security test)
 - `python tools/test_storage.py` (Phase 12 Storage, AHCI, NVMe, MBR/GPT, lspci, lsblk, disktest)
 - `python tools/test_smp.py` (SMP test across `-smp 1, 2, 4, 8`)
 - `python tools/test_security.py` (Security & IPC test)
@@ -74,8 +94,8 @@ Build with `make all`, launch with `make run`, and run test suites:
 - `python tools/test_network.py` (Networking test)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Phase-12%3A%20Modern%20Storage%20%26%20Hardware-success?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Version-v1.2.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Phase-13%3A%20Advanced%20Networking%20%26%20Security-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Version-v1.3.0-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Architecture-x86__64-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86__64%20ASM-00599C?style=for-the-badge&logo=c&logoColor=white">
   <img src="https://img.shields.io/badge/Toolchain-NASM%20%7C%20GCC%20%7C%20Binutils-111111?style=for-the-badge">

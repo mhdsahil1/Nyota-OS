@@ -14,6 +14,12 @@
 
 #define NETDEV_MAX          8
 
+#define NETDEV_FLAG_UP          0x0001
+#define NETDEV_FLAG_BROADCAST   0x0002
+#define NETDEV_FLAG_LOOPBACK    0x0004
+#define NETDEV_FLAG_RUNNING     0x0008
+#define NETDEV_FLAG_MULTICAST   0x0010
+
 /* MAC Address Type */
 typedef uint8_t mac_addr_t[ETH_ALEN];
 
@@ -60,8 +66,13 @@ typedef struct net_device {
     ipv4_addr_t gateway;
     ipv4_addr_t dns;
 
+    uint8_t     ip6_addr[16];
+    bool        has_ip6;
+
     uint32_t    mtu;
+    uint32_t    flags;
     bool        is_up;
+    bool        link_up;
 
     int       (*init)(struct net_device *dev);
     int       (*send)(struct net_device *dev, const void *data, size_t len);
@@ -75,15 +86,73 @@ typedef struct net_device {
     uint64_t    tx_bytes;
     uint64_t    rx_errors;
     uint64_t    tx_errors;
+    uint64_t    rx_dropped;
+    uint64_t    tx_dropped;
 } net_device_t;
+
+/* Userland Info Struct for SYS_NET_CTRL */
+typedef struct {
+    char        name[16];
+    mac_addr_t  mac;
+    uint32_t    ip_addr;
+    uint32_t    netmask;
+    uint32_t    gateway;
+    uint32_t    dns;
+    uint8_t     ip6_addr[16];
+    bool        has_ip6;
+    uint32_t    mtu;
+    uint32_t    flags;
+    bool        link_up;
+    uint64_t    rx_packets;
+    uint64_t    tx_packets;
+    uint64_t    rx_bytes;
+    uint64_t    tx_bytes;
+    uint64_t    rx_errors;
+    uint64_t    tx_errors;
+    uint64_t    rx_dropped;
+    uint64_t    tx_dropped;
+} netdev_info_t;
+
+typedef struct {
+    char        name[16];
+    uint32_t    ip_addr;
+    uint32_t    netmask;
+    uint32_t    gateway;
+    uint32_t    dns;
+    uint8_t     ip6_addr[16];
+    bool        has_ip6;
+    uint32_t    mtu;
+    bool        set_up;
+    bool        is_up;
+} netdev_conf_t;
+
+typedef struct {
+    uint32_t dest;
+    uint32_t netmask;
+    uint32_t gateway;
+    char     ifname[16];
+    bool     valid;
+} route_info_t;
+
+/* SYS_NET_CTRL opcodes */
+#define NET_CTRL_GET_COUNT      1
+#define NET_CTRL_GET_DEV        2
+#define NET_CTRL_SET_DEV        3
+#define NET_CTRL_GET_ROUTES     4
+#define NET_CTRL_ADD_ROUTE      5
+#define NET_CTRL_DEL_ROUTE      6
 
 /* Device Management APIs */
 void          netdev_init(void);
 int           netdev_register(net_device_t *dev);
+int           netdev_unregister(net_device_t *dev);
 net_device_t *netdev_get_by_name(const char *name);
 net_device_t *netdev_get_default(void);
 size_t        netdev_get_count(void);
 net_device_t *netdev_get_by_index(size_t idx);
+
+int           netdev_set_up(net_device_t *dev);
+int           netdev_set_down(net_device_t *dev);
 
 /* Entry point called by drivers when a raw Ethernet frame is received */
 int           netdev_receive(net_device_t *dev, const void *data, size_t len);

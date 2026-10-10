@@ -269,7 +269,10 @@ int getprocs(proc_info_t *buf, size_t max_count);
 
 /* BSD Socket Constants */
 #define AF_UNSPEC       0
+#define AF_UNIX         1
+#define AF_LOCAL        1
 #define AF_INET         2
+#define AF_INET6        10
 
 #define SOCK_STREAM     1
 #define SOCK_DGRAM      2
@@ -279,13 +282,11 @@ int getprocs(proc_info_t *buf, size_t max_count);
 #define IPPROTO_ICMP    1
 #define IPPROTO_TCP     6
 #define IPPROTO_UDP     17
+#define IPPROTO_ICMPV6  58
 
 #define SHUT_RD         0
 #define SHUT_WR         1
 #define SHUT_RDWR       2
-
-#define AF_UNIX         1
-#define AF_LOCAL        1
 
 struct sockaddr_un {
     uint16_t sun_family;
@@ -295,6 +296,10 @@ struct sockaddr_un {
 /* BSD Socket Address Structures */
 struct in_addr {
     uint32_t s_addr;
+};
+
+struct in6_addr {
+    uint8_t s6_addr[16];
 };
 
 struct sockaddr {
@@ -308,6 +313,136 @@ struct sockaddr_in {
     struct in_addr sin_addr;
     char           sin_zero[8];
 };
+
+struct sockaddr_in6 {
+    uint16_t        sin6_family;
+    uint16_t        sin6_port;
+    uint32_t        sin6_flowinfo;
+    struct in6_addr sin6_addr;
+    uint32_t        sin6_scope_id;
+};
+
+#define INET6_ADDRSTRLEN        46
+
+/* Network Device Information Structures */
+#define NETDEV_FLAG_UP          0x0001
+#define NETDEV_FLAG_BROADCAST   0x0002
+#define NETDEV_FLAG_LOOPBACK    0x0004
+#define NETDEV_FLAG_RUNNING     0x0008
+#define NETDEV_FLAG_MULTICAST   0x0010
+
+typedef struct {
+    char        name[16];
+    uint8_t     mac[6];
+    uint32_t    ip_addr;
+    uint32_t    netmask;
+    uint32_t    gateway;
+    uint32_t    dns;
+    uint8_t     ip6_addr[16];
+    bool        has_ip6;
+    uint32_t    mtu;
+    uint32_t    flags;
+    bool        link_up;
+    uint64_t    rx_packets;
+    uint64_t    tx_packets;
+    uint64_t    rx_bytes;
+    uint64_t    tx_bytes;
+    uint64_t    rx_errors;
+    uint64_t    tx_errors;
+    uint64_t    rx_dropped;
+    uint64_t    tx_dropped;
+} netdev_info_t;
+
+typedef struct {
+    char        name[16];
+    uint32_t    ip_addr;
+    uint32_t    netmask;
+    uint32_t    gateway;
+    uint32_t    dns;
+    uint8_t     ip6_addr[16];
+    bool        has_ip6;
+    uint32_t    mtu;
+    bool        set_up;
+    bool        is_up;
+} netdev_conf_t;
+
+typedef struct {
+    uint32_t dest;
+    uint32_t netmask;
+    uint32_t gateway;
+    char     ifname[16];
+    bool     valid;
+} route_info_t;
+
+#define NET_CTRL_GET_COUNT      1
+#define NET_CTRL_GET_DEV        2
+#define NET_CTRL_SET_DEV        3
+#define NET_CTRL_GET_ROUTES     4
+#define NET_CTRL_ADD_ROUTE      5
+#define NET_CTRL_DEL_ROUTE      6
+
+int64_t sys_net_ctrl(uint32_t cmd, uint64_t arg1, uint64_t arg2);
+
+/* Firewall Definitions */
+#define FIREWALL_MAX_RULES      32
+#define FIREWALL_DIR_IN         1
+#define FIREWALL_DIR_OUT        2
+#define FIREWALL_DIR_BOTH       3
+#define FIREWALL_ACTION_DROP    0
+#define FIREWALL_ACTION_ACCEPT  1
+#define FIREWALL_FAMILY_ANY     0
+#define FIREWALL_FAMILY_IPV4    1
+#define FIREWALL_FAMILY_IPV6    2
+#define FIREWALL_PROTO_ANY      0
+#define FIREWALL_PROTO_ICMP     1
+#define FIREWALL_PROTO_TCP      6
+#define FIREWALL_PROTO_UDP      17
+#define FIREWALL_PROTO_ICMPV6   58
+
+typedef struct {
+    uint32_t id;
+    uint8_t  direction;
+    uint8_t  action;
+    uint8_t  family;
+    uint8_t  protocol;
+    uint32_t src_ip;
+    uint32_t src_mask;
+    uint32_t dst_ip;
+    uint32_t dst_mask;
+    uint8_t  src_ip6[16];
+    uint8_t  src_ip6_prefix;
+    uint8_t  dst_ip6[16];
+    uint8_t  dst_ip6_prefix;
+    uint16_t src_port_start;
+    uint16_t src_port_end;
+    uint16_t dst_port_start;
+    uint16_t dst_port_end;
+    char     ifname[16];
+    uint64_t packets_matched;
+    uint64_t bytes_matched;
+    bool     enabled;
+} firewall_rule_t;
+
+typedef struct {
+    bool     enabled;
+    uint8_t  default_in_policy;
+    uint8_t  default_out_policy;
+    uint32_t rule_count;
+    uint64_t total_in_packets;
+    uint64_t total_out_packets;
+    uint64_t total_accepted;
+    uint64_t total_dropped;
+} firewall_status_t;
+
+#define FW_CMD_GET_STATUS       1
+#define FW_CMD_GET_RULES        2
+#define FW_CMD_ADD_RULE         3
+#define FW_CMD_DEL_RULE         4
+#define FW_CMD_SET_POLICY       5
+#define FW_CMD_SET_ENABLED      6
+#define FW_CMD_FLUSH            7
+
+int64_t sys_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
 /* Byte Order Conversion Helpers */
 static inline uint16_t htons(uint16_t val) {
@@ -329,9 +464,11 @@ static inline uint32_t ntohl(uint32_t val) {
     return htonl(val);
 }
 
-/* IPv4 Address Parsing & Formatting */
-uint32_t inet_addr(const char *cp);
-char    *inet_ntoa(struct in_addr in);
+/* Address Parsing & Formatting */
+uint32_t    inet_addr(const char *cp);
+char       *inet_ntoa(struct in_addr in);
+const char *inet_ntop(int af, const void *src, char *dst, size_t size);
+int         inet_pton(int af, const char *src, void *dst);
 
 /* Socket System Calls */
 int     socket(int domain, int type, int protocol);
@@ -499,6 +636,7 @@ char *strcat(char *dest, const char *src);
 char *strncat(char *dest, const char *src, size_t n);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
+char *strstr(const char *haystack, const char *needle);
 int   atoi(const char *s);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);

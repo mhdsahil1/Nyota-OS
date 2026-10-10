@@ -457,3 +457,111 @@ int statvfs(const char *path, statvfs_t *buf) {
     return (int)syscall2(76, (uint64_t)path, (uint64_t)buf);
 }
 
+int64_t sys_net_ctrl(uint32_t cmd, uint64_t arg1, uint64_t arg2) {
+    return syscall3(77, (uint64_t)cmd, arg1, arg2);
+}
+
+int64_t sys_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+    return syscall4(78, (uint64_t)cmd, arg1, arg2, arg3);
+}
+
+const char *inet_ntop(int af, const void *src, char *dst, size_t size) {
+    if (!src || !dst || size == 0) return NULL;
+    if (af == AF_INET) {
+        if (size < 16) return NULL;
+        const uint8_t *b = (const uint8_t *)src;
+        char *p = dst;
+        for (int i = 0; i < 4; i++) {
+            uint8_t val = b[i];
+            if (val >= 100) {
+                *p++ = (char)('0' + (val / 100));
+                *p++ = (char)('0' + ((val / 10) % 10));
+                *p++ = (char)('0' + (val % 10));
+            } else if (val >= 10) {
+                *p++ = (char)('0' + (val / 10));
+                *p++ = (char)('0' + (val % 10));
+            } else {
+                *p++ = (char)('0' + val);
+            }
+            if (i < 3) *p++ = '.';
+        }
+        *p = '\0';
+        return dst;
+    } else if (af == AF_INET6) {
+        if (size < 40) return NULL;
+        const uint8_t *b = (const uint8_t *)src;
+        char *p = dst;
+        const char hex[] = "0123456789abcdef";
+        for (int i = 0; i < 8; i++) {
+            uint16_t word = ((uint16_t)b[i * 2] << 8) | b[i * 2 + 1];
+            bool started = false;
+            for (int k = 3; k >= 0; k--) {
+                uint8_t nib = (word >> (k * 4)) & 0xF;
+                if (nib != 0 || started || k == 0) {
+                    *p++ = hex[nib];
+                    started = true;
+                }
+            }
+            if (i < 7) *p++ = ':';
+        }
+        *p = '\0';
+        return dst;
+    }
+    return NULL;
+}
+
+int inet_pton(int af, const char *src, void *dst) {
+    if (!src || !dst) return 0;
+    if (af == AF_INET) {
+        uint32_t addr = inet_addr(src);
+        if (addr == 0 && strcmp(src, "0.0.0.0") != 0) return 0;
+        memcpy(dst, &addr, 4);
+        return 1;
+    } else if (af == AF_INET6) {
+        uint8_t *b = (uint8_t *)dst;
+        memset(b, 0, 16);
+        uint16_t words[8] = {0};
+        int word_count = 0;
+        int dbl = -1;
+        const char *p = src;
+        if (p[0] == ':' && p[1] == ':') { dbl = 0; p += 2; }
+        while (*p && word_count < 8) {
+            uint32_t val = 0;
+            int digs = 0;
+            while (*p && *p != ':') {
+                char c = *p++;
+                int v = -1;
+                if (c >= '0' && c <= '9') v = c - '0';
+                else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+                else return 0;
+                val = (val << 4) | (uint32_t)v;
+                digs++;
+                if (digs > 4) return 0;
+            }
+            words[word_count++] = (uint16_t)val;
+            if (*p == ':') {
+                p++;
+                if (*p == ':') {
+                    if (dbl != -1) return 0;
+                    dbl = word_count;
+                    p++;
+                    if (*p == '\0') break;
+                }
+            }
+        }
+        if (dbl != -1) {
+            int fill = 8 - word_count;
+            int out_idx = 7;
+            for (int i = word_count - 1; i >= dbl; i--) words[out_idx--] = words[i];
+            for (int i = 0; i < fill; i++) words[dbl + i] = 0;
+        } else if (word_count != 8) return 0;
+        for (int i = 0; i < 8; i++) {
+            b[i * 2] = (uint8_t)(words[i] >> 8);
+            b[i * 2 + 1] = (uint8_t)(words[i] & 0xFF);
+        }
+        return 1;
+    }
+    return 0;
+}
+

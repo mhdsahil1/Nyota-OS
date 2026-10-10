@@ -37,6 +37,11 @@ void scheduler_sleep(uint64_t ms);
 void scheduler_wake(process_t *proc);
 void scheduler_request_reschedule(void);
 
+/* Multicore safety queries */
+bool process_is_running_anywhere(process_t *proc);
+bool process_is_running_on_other_cpu(process_t *proc, uint32_t my_cpu_id);
+bool scheduler_is_enqueued(process_t *proc);
+
 /* Diagnostic inspection */
 void scheduler_print_stats(void);
 

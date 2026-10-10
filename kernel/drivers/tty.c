@@ -27,6 +27,7 @@ void tty_init(void) {
         system_ttys[i].flags = TTY_FLAG_ECHO | TTY_FLAG_ICANON | TTY_FLAG_ISIG;
         system_ttys[i].foreground_pgrp = 0;
         system_ttys[i].waiters = NULL;
+        spinlock_init(&system_ttys[i].lock);
     }
     current_tty_id = 0;
 }

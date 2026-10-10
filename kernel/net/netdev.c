@@ -5,6 +5,7 @@
 #include "net/netdev.h"
 #include "net/ethernet.h"
 #include "net/ipv4.h"
+#include "net/ipv6.h"
 #include "memory.h"
 #include "serial.h"
 
@@ -107,6 +108,13 @@ static void loopback_init(void) {
     loopback_dev.dns.addr     = 0;
     loopback_dev.mtu          = 65536;
     loopback_dev.is_up        = true;
+    loopback_dev.link_up      = true;
+    loopback_dev.flags        = NETDEV_FLAG_UP | NETDEV_FLAG_RUNNING | NETDEV_FLAG_LOOPBACK;
+
+    /* IPv6 Loopback: ::1 */
+    loopback_dev.ip6_addr[15] = 1;
+    loopback_dev.has_ip6      = true;
+
     loopback_dev.send         = loopback_send;
 
     netdev_register(&loopback_dev);
@@ -128,12 +136,37 @@ int netdev_register(net_device_t *dev) {
 
     netdev_list[netdev_count++] = dev;
     dev->is_up = true;
+    dev->link_up = true;
+    dev->flags |= NETDEV_FLAG_UP | NETDEV_FLAG_RUNNING;
+
+    if (strcmp(dev->name, "lo") != 0) {
+        dev->flags |= NETDEV_FLAG_BROADCAST | NETDEV_FLAG_MULTICAST;
+        /* Auto-generate SLAAC IPv6 link-local address if MAC is valid and IPv6 not configured */
+        if (!dev->has_ip6) {
+            ipv6_generate_slaac(dev->mac, (ipv6_addr_t *)dev->ip6_addr);
+            dev->has_ip6 = true;
+        }
+    }
 
     serial_write("[NET] Registered interface: ");
     serial_write(dev->name);
     serial_write("\n");
 
     return 0;
+}
+
+int netdev_unregister(net_device_t *dev) {
+    if (!dev) return -1;
+    for (size_t i = 0; i < netdev_count; i++) {
+        if (netdev_list[i] == dev) {
+            for (size_t j = i; j < netdev_count - 1; j++) {
+                netdev_list[j] = netdev_list[j + 1];
+            }
+            netdev_list[--netdev_count] = NULL;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 net_device_t *netdev_get_by_name(const char *name) {
@@ -160,6 +193,20 @@ size_t netdev_get_count(void) {
 net_device_t *netdev_get_by_index(size_t idx) {
     if (idx >= netdev_count) return NULL;
     return netdev_list[idx];
+}
+
+int netdev_set_up(net_device_t *dev) {
+    if (!dev) return -1;
+    dev->is_up = true;
+    dev->flags |= NETDEV_FLAG_UP;
+    return 0;
+}
+
+int netdev_set_down(net_device_t *dev) {
+    if (!dev) return -1;
+    dev->is_up = false;
+    dev->flags &= ~NETDEV_FLAG_UP;
+    return 0;
 }
 
 int netdev_receive(net_device_t *dev, const void *data, size_t len) {

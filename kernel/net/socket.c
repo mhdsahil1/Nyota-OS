@@ -158,11 +158,21 @@ socket_t *socket_find_udp(uint32_t local_ip, uint16_t port) {
         if (socket_table[i].in_use &&
             socket_table[i].type == SOCK_DGRAM &&
             socket_table[i].local_port == port &&
-            (socket_table[i].local_ip == local_ip || socket_table[i].local_ip == 0)) {
+            (socket_table[i].local_ip == local_ip || socket_table[i].local_ip == 0 ||
+             local_ip == 0xFFFFFFFF || local_ip == 0)) {
             return &socket_table[i];
         }
     }
     return NULL;
+}
+
+socket_t *socket_get_by_id(int id) {
+    if (id < 0 || id >= SOCKET_TABLE_MAX) return NULL;
+    return &socket_table[id];
+}
+
+int socket_get_max(void) {
+    return SOCKET_TABLE_MAX;
 }
 
 /* ── Lifecycle & Socket Operations ────────────────────────────────────────── */
@@ -192,6 +202,8 @@ socket_t *socket_create(int domain, int type, int protocol) {
             s->backlog_limit = 5;
             s->in_use = true;
             s->ref_count = 1;
+            s->rto_ms = 500;
+            s->local_window = 8192;
 
             return s;
         }
@@ -408,10 +420,21 @@ int64_t socket_send(socket_t *sock, const void *buf, size_t len, int flags) {
             size_t chunk = len - total_sent;
             if (chunk > 1460) chunk = 1460;
 
+            uint16_t win = (uint16_t)(SOCKET_BUFFER_SIZE - sock->rx_count);
+            sock->local_window = win;
+
+            /* Store segment in retransmission buffer */
+            memcpy(sock->tx_unacked_buf, p + total_sent, chunk);
+            sock->tx_unacked_len = chunk;
+            sock->unacked_seq = sock->local_seq;
+            sock->last_tx_ms = timer_uptime_ms();
+            sock->retry_count = 0;
+            sock->rto_ms = 500;
+
             int res = tcp_send_packet(sock->local_ip, sock->local_port,
                                       sock->remote_ip, sock->remote_port,
                                       sock->local_seq, sock->remote_seq,
-                                      TCP_FLAG_PSH | TCP_FLAG_ACK, 8192,
+                                      TCP_FLAG_PSH | TCP_FLAG_ACK, win,
                                       p + total_sent, chunk);
             if (res != 0) return -1;
 
@@ -480,9 +503,18 @@ int64_t socket_recv(socket_t *sock, void *buf, size_t len, int flags) {
 
         return (int64_t)to_read;
     } else if (sock->type == SOCK_DGRAM) {
-        /* Extract queued UDP datagram */
+        /* Extract queued UDP datagram with timeout */
+        uint64_t start_ms = timer_uptime_ms();
         while (sock->rx_count < 8) {
             e1000_poll_rx();
+            if (timer_uptime_ms() - start_ms > 1500) {
+                process_t *curr = process_get_current();
+                if (curr) {
+                    curr->state = PROCESS_RUNNING;
+                    socket_remove_waiter(sock, curr);
+                }
+                return -1; /* Receive timeout */
+            }
             socket_wait(sock);
         }
 

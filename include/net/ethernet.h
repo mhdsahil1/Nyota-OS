@@ -1,5 +1,5 @@
 /* =============================================================================
- * Nyota OS — Ethernet II Framing & Disptach Layer
+ * Nyota OS — Ethernet II Framing & Dispatch Layer
  * =========================================================================== */
 
 #ifndef NYOTA_NET_ETHERNET_H
@@ -10,6 +10,7 @@
 
 #define ETHERTYPE_IPV4      0x0800
 #define ETHERTYPE_ARP       0x0806
+#define ETHERTYPE_IPV6      0x86DD
 
 #define ETH_MIN_LEN         60
 #define ETH_HLEN            14
@@ -25,6 +26,7 @@ extern const mac_addr_t ETH_BROADCAST_MAC;
 
 bool ethernet_mac_equal(const mac_addr_t a, const mac_addr_t b);
 bool ethernet_mac_is_broadcast(const mac_addr_t mac);
+bool ethernet_mac_is_multicast(const mac_addr_t mac);
 
 int  ethernet_receive(net_device_t *dev, const void *data, size_t len);
 int  ethernet_send(net_device_t *dev, const mac_addr_t dest, uint16_t ethertype, const void *payload, size_t len);

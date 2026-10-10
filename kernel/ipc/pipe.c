@@ -15,37 +15,51 @@
 
 static pipe_t system_pipes[MAX_SYSTEM_PIPES];
 static uint32_t active_pipe_count = 0;
+static spinlock_t pipe_table_lock = SPINLOCK_INIT;
 
 void pipe_init(void) {
-    memset(system_pipes, 0, sizeof(system_pipes));
+    spinlock_init(&pipe_table_lock);
+    for (size_t i = 0; i < MAX_SYSTEM_PIPES; i++) {
+        memset(&system_pipes[i], 0, sizeof(pipe_t));
+        spinlock_init(&system_pipes[i].lock);
+    }
     active_pipe_count = 0;
 }
 
 uint32_t pipe_active_count(void) {
-    return active_pipe_count;
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe_table_lock);
+    uint32_t cnt = active_pipe_count;
+    spinlock_release_irqrestore(&pipe_table_lock, rflags);
+    return cnt;
 }
 
 pipe_t *pipe_create(void) {
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe_table_lock);
     for (size_t i = 0; i < MAX_SYSTEM_PIPES; i++) {
         if (!system_pipes[i].in_use) {
             memset(&system_pipes[i], 0, sizeof(pipe_t));
+            spinlock_init(&system_pipes[i].lock);
             system_pipes[i].in_use = true;
             system_pipes[i].readers_count = 1;
             system_pipes[i].writers_count = 1;
             system_pipes[i].ref_count = 2;
             active_pipe_count++;
+            spinlock_release_irqrestore(&pipe_table_lock, rflags);
             return &system_pipes[i];
         }
     }
+    spinlock_release_irqrestore(&pipe_table_lock, rflags);
     return NULL;
 }
 
 static void pipe_free(pipe_t *pipe) {
     if (!pipe) return;
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe_table_lock);
     if (pipe->in_use) {
         pipe->in_use = false;
         if (active_pipe_count > 0) active_pipe_count--;
     }
+    spinlock_release_irqrestore(&pipe_table_lock, rflags);
 }
 
 int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
@@ -53,26 +67,34 @@ int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
     if (count == 0) return 0;
 
     process_t *curr = process_get_current();
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe->lock);
 
     /* Wait for data or EOF */
     while (pipe->count == 0) {
         if (pipe->writers_count == 0) {
+            spinlock_release_irqrestore(&pipe->lock, rflags);
             return 0; /* All writers closed -> EOF */
         }
         if (curr) {
             if (curr->pending_signals & ~curr->blocked_signals) {
+                spinlock_release_irqrestore(&pipe->lock, rflags);
                 return SYS_ERR_EINTR;
             }
             pipe->reader_waiter = curr;
             curr->state = PROCESS_SLEEPING;
             scheduler_remove(curr);
             scheduler_request_reschedule();
+            spinlock_release_irqrestore(&pipe->lock, rflags);
+
             while (curr->state == PROCESS_SLEEPING && pipe->count == 0 && pipe->writers_count > 0) {
                 __asm__ volatile ("sti; hlt");
             }
+
+            rflags = spinlock_acquire_irqsave(&pipe->lock);
             pipe->reader_waiter = NULL;
             curr->state = PROCESS_RUNNING;
             if (pipe->count == 0 && pipe->writers_count > 0 && (curr->pending_signals & ~curr->blocked_signals)) {
+                spinlock_release_irqrestore(&pipe->lock, rflags);
                 return SYS_ERR_EINTR;
             }
         } else {
@@ -99,6 +121,7 @@ int64_t pipe_read(pipe_t *pipe, void *buf, size_t count) {
         scheduler_wake(w);
     }
 
+    spinlock_release_irqrestore(&pipe->lock, rflags);
     return (int64_t)to_read;
 }
 
@@ -107,8 +130,10 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
     if (count == 0) return 0;
 
     process_t *curr = process_get_current();
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe->lock);
 
     if (pipe->readers_count == 0) {
+        spinlock_release_irqrestore(&pipe->lock, rflags);
         if (curr) {
             signal_send(curr, SIGPIPE);
         }
@@ -120,6 +145,7 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
 
     while (written < count) {
         if (pipe->readers_count == 0) {
+            spinlock_release_irqrestore(&pipe->lock, rflags);
             if (curr) {
                 signal_send(curr, SIGPIPE);
             }
@@ -128,23 +154,30 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
 
         while (pipe->count == PIPE_CAPACITY) {
             if (pipe->readers_count == 0) {
+                spinlock_release_irqrestore(&pipe->lock, rflags);
                 if (curr) signal_send(curr, SIGPIPE);
                 return written > 0 ? (int64_t)written : SYS_ERR_EPIPE;
             }
             if (curr) {
                 if (curr->pending_signals & ~curr->blocked_signals) {
+                    spinlock_release_irqrestore(&pipe->lock, rflags);
                     return written > 0 ? (int64_t)written : SYS_ERR_EINTR;
                 }
                 pipe->writer_waiter = curr;
                 curr->state = PROCESS_SLEEPING;
                 scheduler_remove(curr);
                 scheduler_request_reschedule();
+                spinlock_release_irqrestore(&pipe->lock, rflags);
+
                 while (curr->state == PROCESS_SLEEPING && pipe->count == PIPE_CAPACITY && pipe->readers_count > 0) {
                     __asm__ volatile ("sti; hlt");
                 }
+
+                rflags = spinlock_acquire_irqsave(&pipe->lock);
                 pipe->writer_waiter = NULL;
                 curr->state = PROCESS_RUNNING;
                 if (pipe->count == PIPE_CAPACITY && pipe->readers_count > 0 && (curr->pending_signals & ~curr->blocked_signals)) {
+                    spinlock_release_irqrestore(&pipe->lock, rflags);
                     return written > 0 ? (int64_t)written : SYS_ERR_EINTR;
                 }
             } else {
@@ -170,11 +203,13 @@ int64_t pipe_write(pipe_t *pipe, const void *buf, size_t count) {
         }
     }
 
+    spinlock_release_irqrestore(&pipe->lock, rflags);
     return (int64_t)written;
 }
 
 void pipe_close_read(pipe_t *pipe) {
     if (!pipe) return;
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe->lock);
     if (pipe->readers_count > 0) {
         pipe->readers_count--;
     }
@@ -184,16 +219,22 @@ void pipe_close_read(pipe_t *pipe) {
         pipe->writer_waiter = NULL;
         scheduler_wake(w);
     }
+    bool free_needed = false;
     if (pipe->ref_count > 0) {
         pipe->ref_count--;
         if (pipe->ref_count == 0) {
-            pipe_free(pipe);
+            free_needed = true;
         }
+    }
+    spinlock_release_irqrestore(&pipe->lock, rflags);
+    if (free_needed) {
+        pipe_free(pipe);
     }
 }
 
 void pipe_close_write(pipe_t *pipe) {
     if (!pipe) return;
+    uint64_t rflags = spinlock_acquire_irqsave(&pipe->lock);
     if (pipe->writers_count > 0) {
         pipe->writers_count--;
     }
@@ -203,11 +244,16 @@ void pipe_close_write(pipe_t *pipe) {
         pipe->reader_waiter = NULL;
         scheduler_wake(r);
     }
+    bool free_needed = false;
     if (pipe->ref_count > 0) {
         pipe->ref_count--;
         if (pipe->ref_count == 0) {
-            pipe_free(pipe);
+            free_needed = true;
         }
+    }
+    spinlock_release_irqrestore(&pipe->lock, rflags);
+    if (free_needed) {
+        pipe_free(pipe);
     }
 }
 

@@ -135,6 +135,9 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/ethernet.o         \
     $(BUILD_DIR)/arp.o              \
     $(BUILD_DIR)/ipv4.o             \
+    $(BUILD_DIR)/ipv6.o             \
+    $(BUILD_DIR)/icmpv6.o           \
+    $(BUILD_DIR)/firewall.o         \
     $(BUILD_DIR)/route.o            \
     $(BUILD_DIR)/icmp.o             \
     $(BUILD_DIR)/udp.o              \
@@ -218,7 +221,13 @@ USER_BINARIES := \
     fs/root/bin/lspci       \
     fs/root/bin/lsblk       \
     fs/root/bin/diskinfo    \
-    fs/root/bin/disktest
+    fs/root/bin/disktest    \
+    fs/root/bin/dhclient    \
+    fs/root/bin/httpget     \
+    fs/root/bin/httpd       \
+    fs/root/bin/nyfw        \
+    fs/root/bin/netinfo     \
+    fs/root/bin/ip
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4
@@ -525,6 +534,18 @@ $(BUILD_DIR)/arp.o: kernel/net/arp.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/ipv4.o: kernel/net/ipv4.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/net/ipv4.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ipv6.o: kernel/net/ipv6.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/ipv6.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/icmpv6.o: kernel/net/icmpv6.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/icmpv6.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/firewall.o: kernel/net/firewall.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/net/firewall.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/route.o: kernel/net/route.c | $(BUILD_DIR)

@@ -10,6 +10,7 @@
 #include "net/icmp.h"
 #include "net/udp.h"
 #include "net/tcp.h"
+#include "net/firewall.h"
 #include "memory.h"
 #include "heap.h"
 #include "serial.h"
@@ -97,7 +98,23 @@ int ipv4_receive(net_device_t *dev, const void *data, size_t len) {
     const uint8_t *payload = (const uint8_t *)data + ihl;
     size_t payload_len = total_len - ihl;
 
-    /* 6. Protocol demultiplexing */
+    /* 6. Firewall Inspection */
+    uint16_t sport = 0, dport = 0;
+    if (ip->protocol == IP_PROTO_TCP || ip->protocol == IP_PROTO_UDP) {
+        if (payload_len >= 4) {
+            sport = (payload[0] << 8) | payload[1];
+            dport = (payload[2] << 8) | payload[3];
+        }
+    }
+
+    int fw_action = firewall_check_in(dev, FIREWALL_FAMILY_IPV4, ip->protocol,
+                                      &ip->src, &ip->dest, sport, dport, payload_len);
+    if (fw_action == FIREWALL_ACTION_DROP) {
+        dev->rx_dropped++;
+        return 0;
+    }
+
+    /* 7. Protocol demultiplexing */
     switch (ip->protocol) {
         case IP_PROTO_ICMP:
             return icmp_receive(dev, ip->src, payload, payload_len);
@@ -121,6 +138,23 @@ int ipv4_send_from(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, uint8_t
     size_t total_len = sizeof(ipv4_header_t) + len;
     if (total_len > dev->mtu) {
         return -1; /* Exceeds MTU */
+    }
+
+    /* Firewall Inspection */
+    uint16_t sport = 0, dport = 0;
+    if (protocol == IP_PROTO_TCP || protocol == IP_PROTO_UDP) {
+        if (len >= 4) {
+            const uint8_t *p = (const uint8_t *)payload;
+            sport = (p[0] << 8) | p[1];
+            dport = (p[2] << 8) | p[3];
+        }
+    }
+
+    int fw_action = firewall_check_out(dev, FIREWALL_FAMILY_IPV4, protocol,
+                                       &src_ip, &dest_ip, sport, dport, len);
+    if (fw_action == FIREWALL_ACTION_DROP) {
+        dev->tx_dropped++;
+        return -1;
     }
 
     uint8_t buffer[ETH_FRAME_LEN];
@@ -167,7 +201,9 @@ int ipv4_send_from(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, uint8_t
 
         /* Resolve next-hop MAC via ARP */
         mac_addr_t dest_mac;
-        if (arp_lookup(dev, next_hop, dest_mac) != 0) {
+        if (dest_ip == 0xFFFFFFFF) {
+            memcpy(dest_mac, ETH_BROADCAST_MAC, ETH_ALEN);
+        } else if (arp_lookup(dev, next_hop, dest_mac) != 0) {
             if (dyn_alloc) kfree(send_buf);
             return -1; /* Unreachable host / ARP failure */
         }

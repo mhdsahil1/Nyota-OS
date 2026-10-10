@@ -59,6 +59,18 @@ int route_add(uint32_t dest, uint32_t netmask, uint32_t gateway, net_device_t *d
     return -1; /* Route table full */
 }
 
+int route_del(uint32_t dest, uint32_t netmask) {
+    for (int i = 0; i < ROUTE_TABLE_MAX; i++) {
+        if (route_table[i].valid &&
+            route_table[i].dest == dest &&
+            route_table[i].netmask == netmask) {
+            route_table[i].valid = false;
+            return 0;
+        }
+    }
+    return -1; /* Not found */
+}
+
 int route_lookup(uint32_t dest, net_device_t **out_dev, uint32_t *out_next_hop) {
     if (!out_dev || !out_next_hop) return -1;
 
@@ -93,4 +105,28 @@ int route_lookup(uint32_t dest, net_device_t **out_dev, uint32_t *out_next_hop) 
     }
 
     return -1;
+}
+
+int route_get_entries(route_info_t *out_entries, size_t max_entries, size_t *out_count) {
+    if (!out_entries || !out_count) return -1;
+
+    size_t count = 0;
+    for (int i = 0; i < ROUTE_TABLE_MAX && count < max_entries; i++) {
+        if (route_table[i].valid) {
+            out_entries[count].dest = route_table[i].dest;
+            out_entries[count].netmask = route_table[i].netmask;
+            out_entries[count].gateway = route_table[i].gateway;
+            if (route_table[i].dev) {
+                strncpy(out_entries[count].ifname, route_table[i].dev->name, 15);
+                out_entries[count].ifname[15] = '\0';
+            } else {
+                out_entries[count].ifname[0] = '\0';
+            }
+            out_entries[count].valid = true;
+            count++;
+        }
+    }
+
+    *out_count = count;
+    return 0;
 }

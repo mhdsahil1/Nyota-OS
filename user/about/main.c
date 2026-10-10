@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
         gui_draw_rect(win, 12, 12, ABOUT_WIDTH - 24, 60, COLOR_ACCENT_PRIMARY);
 
         gui_draw_text(win, 24, 22, "N Y O T A   O S", COLOR_ACCENT_PRIMARY, 0);
-        gui_draw_text(win, 24, 42, "Version 1.2.0 (Modern Storage & Hardware Release)", COLOR_TITLE_ACTIVE, 0);
+        gui_draw_text(win, 24, 42, "Version 1.3.0 (Advanced Networking & Network Security)", COLOR_TITLE_ACTIVE, 0);
 
         /* Subsystems Card */
         int cy = 84;
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
         cy += 20;
         gui_draw_text(win, 24, cy, "Storage      : Block Layer, AHCI, NVMe, MBR/GPT & Cache", COLOR_TEXT_MUTED, 0);
         cy += 20;
-        gui_draw_text(win, 24, cy, "Networking   : TCP/IP Stack & Sockets (E1000 Driver)", COLOR_TEXT_MUTED, 0);
+        gui_draw_text(win, 24, cy, "Networking   : IPv4/IPv6, DHCP, TCP, DNS, HTTP, nyfw Firewall", COLOR_TEXT_MUTED, 0);
         cy += 20;
         gui_draw_text(win, 24, cy, "Interface    : Native Desktop Environment & Compositor", COLOR_SUCCESS, 0);
 

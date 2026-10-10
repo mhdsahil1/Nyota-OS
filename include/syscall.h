@@ -87,6 +87,8 @@
 #define SYS_BLK_WRITE         74
 #define SYS_BLK_FLUSH         75
 #define SYS_STATVFS           76
+#define SYS_NET_CTRL          77
+#define SYS_FIREWALL_OP       78
 
 /* SMP Information Data Structures */
 typedef struct {

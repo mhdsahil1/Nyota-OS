@@ -34,6 +34,52 @@ static void idle_task(void) {
     }
 }
 
+/* ── Multicore Process Safety Queries ─────────────────────────────────────── */
+
+bool process_is_running_anywhere(process_t *proc) {
+    if (!proc) return false;
+    uint32_t total_cpus = cpu_count();
+    for (uint32_t i = 0; i < total_cpus; i++) {
+        if (!cpu_is_online(i)) continue;
+        cpu_t *c = cpu_get(i);
+        if (c && c->current_proc == proc) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool process_is_running_on_other_cpu(process_t *proc, uint32_t my_cpu_id) {
+    if (!proc) return false;
+    uint32_t total_cpus = cpu_count();
+    for (uint32_t i = 0; i < total_cpus; i++) {
+        if (i == my_cpu_id || !cpu_is_online(i)) continue;
+        cpu_t *c = cpu_get(i);
+        if (c && c->current_proc == proc) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool scheduler_is_enqueued(process_t *proc) {
+    if (!proc) return false;
+    uint32_t total_cpus = cpu_count();
+    for (uint32_t i = 0; i < total_cpus; i++) {
+        cpu_t *c = cpu_get(i);
+        if (!c) continue;
+        uint64_t rflags = spinlock_acquire_irqsave(&c->lock);
+        for (process_t *chk = c->ready_head; chk != NULL; chk = chk->next) {
+            if (chk == proc) {
+                spinlock_release_irqrestore(&c->lock, rflags);
+                return true;
+            }
+        }
+        spinlock_release_irqrestore(&c->lock, rflags);
+    }
+    return false;
+}
+
 /* ── Ready Queue Operations (Per-CPU) ─────────────────────────────────────── */
 
 void scheduler_add(process_t *proc) {
@@ -42,6 +88,12 @@ void scheduler_add(process_t *proc) {
     /* Do not enqueue idle tasks */
     cpu_t *curr_cpu = cpu_current();
     if (curr_cpu && proc == &curr_cpu->idle_proc) return;
+
+    /* If process is currently executing on any core, do not enqueue it */
+    if (process_is_running_anywhere(proc)) return;
+
+    /* Verify not already present in any core's ready queue */
+    if (scheduler_is_enqueued(proc)) return;
 
     /* Default affinity to all CPUs if not configured */
     if (proc->cpu_affinity == 0) {
@@ -184,7 +236,7 @@ process_t *scheduler_next(void) {
     uint64_t rflags = spinlock_acquire_irqsave(&cpu->lock);
 
     for (process_t *curr = cpu->ready_head; curr != NULL; curr = curr->next) {
-        if (curr->state == PROCESS_READY) {
+        if (curr->state == PROCESS_READY && !process_is_running_on_other_cpu(curr, cpu->id)) {
             if (curr->prev) {
                 curr->prev->next = curr->next;
             } else {
@@ -219,7 +271,8 @@ process_t *scheduler_next(void) {
         /* Only steal if victim has at least 2 ready processes */
         if (victim->ready_head && victim->ready_head->next) {
             process_t *stolen = victim->ready_tail;
-            if (stolen && stolen != victim->current_proc && stolen->state == PROCESS_READY && (stolen->cpu_affinity & (1ULL << cpu->id))) {
+            if (stolen && stolen != victim->current_proc && stolen->state == PROCESS_READY &&
+                !process_is_running_on_other_cpu(stolen, cpu->id) && (stolen->cpu_affinity & (1ULL << cpu->id))) {
                 /* Unlink from victim */
                 if (stolen->prev) {
                     stolen->prev->next = NULL;

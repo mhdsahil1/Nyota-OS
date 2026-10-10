@@ -9,6 +9,8 @@
 #include "types.h"
 #include "fs/vfs.h"
 
+#include "spinlock.h"
+
 #define PIPE_CAPACITY   4096
 
 struct process;
@@ -27,6 +29,7 @@ typedef struct pipe {
 
     uint32_t ref_count;
     bool in_use;
+    spinlock_t lock;
 } pipe_t;
 
 void pipe_init(void);

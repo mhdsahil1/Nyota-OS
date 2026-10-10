@@ -79,7 +79,19 @@ struct socket {
     uint32_t     remote_seq;
     uint32_t     ack_sent;
     uint16_t     remote_window;
+    uint16_t     local_window;
     uint64_t     retransmit_timer;
+
+    /* TCP Reliability & Retransmission Queue */
+    uint32_t     unacked_seq;
+    uint8_t      tx_unacked_buf[1460];
+    size_t       tx_unacked_len;
+    uint64_t     last_tx_ms;
+    uint32_t     rto_ms;
+    uint8_t      retry_count;
+    uint8_t      dup_ack_count;
+    uint32_t     last_ack_received;
+    uint64_t     time_wait_ms;
 
     /* Circular Receive Buffer */
     uint8_t      rx_buf[SOCKET_BUFFER_SIZE];
@@ -117,6 +129,8 @@ int       socket_close(socket_t *sock);
 socket_t *socket_find_tcp_listener(uint16_t port);
 socket_t *socket_find_tcp_connection(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 socket_t *socket_find_udp(uint32_t local_ip, uint16_t port);
+socket_t *socket_get_by_id(int id);
+int       socket_get_max(void);
 
 /* Blocking / Waking Helpers */
 void      socket_wait(socket_t *sock);

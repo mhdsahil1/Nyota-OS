@@ -3,6 +3,8 @@
  * =========================================================================== */
 
 #include "net/net.h"
+#include "net/ipv6.h"
+#include "net/firewall.h"
 #include "drivers/pci.h"
 #include "drivers/e1000.h"
 #include "vga.h"
@@ -26,35 +28,49 @@ void net_init(void) {
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("IPv4");
 
-    /* 4. Initialize ICMP */
+    /* 4. Initialize IPv6 */
+    ipv6_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("IPv6");
+
+    /* 5. Initialize ICMP */
     icmp_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("ICMP");
 
-    /* 5. Initialize UDP */
+    /* 6. Initialize UDP */
     udp_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("UDP");
 
-    /* 6. Initialize TCP */
+    /* 7. Initialize TCP */
     tcp_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("TCP");
 
-    /* 7. Initialize Socket Layer */
+    /* 8. Initialize Firewall */
+    firewall_init();
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_print("[ OK ] ");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_println("Firewall");
+
+    /* 9. Initialize Socket Layer */
     socket_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[ OK ] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_println("Sockets");
 
-    /* 8. Initialize Intel E1000 Gigabit NIC */
+    /* 10. Initialize Intel E1000 Gigabit NIC */
     e1000_init();
 
     /* Re-evaluate routing table to ensure default route binds to newly added eth0 */
@@ -67,7 +83,7 @@ void net_init(void) {
         vga_set_color(VGA_WHITE, VGA_BLACK);
         vga_println("eth0");
 
-        char buf[32];
+        char buf[64];
         mac_format(eth->mac, buf, sizeof(buf));
         vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
         vga_print("[INFO]  ");
@@ -88,6 +104,15 @@ void net_init(void) {
         vga_set_color(VGA_WHITE, VGA_BLACK);
         vga_print("Gateway: ");
         vga_println(buf);
+
+        if (eth->has_ip6) {
+            ipv6_format((const ipv6_addr_t *)eth->ip6_addr, buf, sizeof(buf));
+            vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+            vga_print("[INFO]  ");
+            vga_set_color(VGA_WHITE, VGA_BLACK);
+            vga_print("IPv6: ");
+            vga_println(buf);
+        }
     }
 }
 

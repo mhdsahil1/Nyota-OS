@@ -14,6 +14,11 @@
 #include "scheduler.h"
 #include "fs/vfs.h"
 #include "net/socket.h"
+#include "net/netdev.h"
+#include "net/route.h"
+#include "net/firewall.h"
+#include "net/ipv4.h"
+#include "net/ipv6.h"
 #include "signal.h"
 #include "security/random.h"
 #include "security/capability.h"
@@ -1023,7 +1028,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.2.0", 5);
+    memcpy(info.kernel_ver, "1.3.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1440,6 +1445,237 @@ static int64_t sys_handle_statvfs(uint64_t u_path, uint64_t u_buf) {
     return 0;
 }
 
+static int64_t sys_handle_net_ctrl(uint32_t cmd, uint64_t arg1, uint64_t arg2) {
+    switch (cmd) {
+        case NET_CTRL_GET_COUNT:
+            return (int64_t)netdev_get_count();
+
+        case NET_CTRL_GET_DEV: {
+            size_t idx = (size_t)arg1;
+            net_device_t *dev = netdev_get_by_index(idx);
+            if (!dev) return SYS_ERR_ENODEV;
+
+            if (!user_validate_pointer((void *)arg2, sizeof(netdev_info_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            netdev_info_t info;
+            memset(&info, 0, sizeof(info));
+            strncpy(info.name, dev->name, sizeof(info.name) - 1);
+            memcpy(info.mac, dev->mac, ETH_ALEN);
+            info.ip_addr = dev->ip_addr.addr;
+            info.netmask = dev->netmask.addr;
+            info.gateway = dev->gateway.addr;
+            info.dns = dev->dns.addr;
+            memcpy(info.ip6_addr, dev->ip6_addr, 16);
+            info.has_ip6 = dev->has_ip6;
+            info.mtu = dev->mtu;
+            info.flags = dev->flags;
+            info.link_up = dev->link_up;
+            info.rx_packets = dev->rx_packets;
+            info.tx_packets = dev->tx_packets;
+            info.rx_bytes = dev->rx_bytes;
+            info.tx_bytes = dev->tx_bytes;
+            info.rx_errors = dev->rx_errors;
+            info.tx_errors = dev->tx_errors;
+            info.rx_dropped = dev->rx_dropped;
+            info.tx_dropped = dev->tx_dropped;
+
+            if (copy_to_user((void *)arg2, &info, sizeof(info)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return 0;
+        }
+
+        case NET_CTRL_SET_DEV: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+
+            if (!user_validate_pointer((void *)arg1, sizeof(netdev_conf_t), false)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            netdev_conf_t conf;
+            if (copy_from_user(&conf, (const void *)arg1, sizeof(conf)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+
+            net_device_t *dev = netdev_get_by_name(conf.name);
+            if (!dev) return SYS_ERR_ENODEV;
+
+            if (conf.ip_addr != 0) dev->ip_addr.addr = conf.ip_addr;
+            if (conf.netmask != 0) dev->netmask.addr = conf.netmask;
+            if (conf.gateway != 0) {
+                dev->gateway.addr = conf.gateway;
+                route_add(0, 0, conf.gateway, dev);
+            }
+            if (conf.dns != 0) dev->dns.addr = conf.dns;
+            if (conf.has_ip6) {
+                memcpy(dev->ip6_addr, conf.ip6_addr, 16);
+                dev->has_ip6 = true;
+            }
+            if (conf.mtu >= 68 && conf.mtu <= 65536) dev->mtu = conf.mtu;
+            if (conf.set_up) {
+                if (conf.is_up) netdev_set_up(dev);
+                else netdev_set_down(dev);
+            }
+
+            if (dev->ip_addr.addr != 0 && dev->netmask.addr != 0) {
+                route_add(dev->ip_addr.addr & dev->netmask.addr, dev->netmask.addr, 0, dev);
+            }
+
+            return 0;
+        }
+
+        case NET_CTRL_GET_ROUTES: {
+            size_t max_entries = (size_t)arg2;
+            if (max_entries > 32) max_entries = 32;
+            if (!user_validate_pointer((void *)arg1, sizeof(route_info_t) * max_entries, true)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            route_info_t entries[32];
+            size_t count = 0;
+            if (route_get_entries(entries, max_entries, &count) != 0) {
+                return SYS_ERR_EINVAL;
+            }
+
+            if (copy_to_user((void *)arg1, entries, sizeof(route_info_t) * count) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return (int64_t)count;
+        }
+
+        case NET_CTRL_ADD_ROUTE: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+
+            if (!user_validate_pointer((void *)arg1, sizeof(route_info_t), false)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            route_info_t r;
+            if (copy_from_user(&r, (const void *)arg1, sizeof(r)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+
+            net_device_t *dev = (r.ifname[0] != '\0') ? netdev_get_by_name(r.ifname) : netdev_get_default();
+            if (!dev) return SYS_ERR_ENODEV;
+
+            if (route_add(r.dest, r.netmask, r.gateway, dev) != 0) {
+                return SYS_ERR_ENOSPC;
+            }
+            return 0;
+        }
+
+        case NET_CTRL_DEL_ROUTE: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            uint32_t dest = (uint32_t)arg1;
+            uint32_t netmask = (uint32_t)arg2;
+            if (route_del(dest, netmask) != 0) {
+                return SYS_ERR_ENOENT;
+            }
+            return 0;
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
+static int64_t sys_handle_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+    (void)arg3;
+    switch (cmd) {
+        case FW_CMD_GET_STATUS: {
+            if (!user_validate_pointer((void *)arg1, sizeof(firewall_status_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+            firewall_status_t st;
+            if (firewall_get_status(&st) != 0) return SYS_ERR_EINVAL;
+            if (copy_to_user((void *)arg1, &st, sizeof(st)) < 0) return SYS_ERR_EFAULT;
+            return 0;
+        }
+
+        case FW_CMD_GET_RULES: {
+            size_t max_rules = (size_t)arg2;
+            if (max_rules > FIREWALL_MAX_RULES) max_rules = FIREWALL_MAX_RULES;
+            if (!user_validate_pointer((void *)arg1, sizeof(firewall_rule_t) * max_rules, true)) {
+                return SYS_ERR_EFAULT;
+            }
+            firewall_rule_t k_rules[FIREWALL_MAX_RULES];
+            size_t count = 0;
+            if (firewall_get_rules(k_rules, max_rules, &count) != 0) return SYS_ERR_EINVAL;
+            if (copy_to_user((void *)arg1, k_rules, sizeof(firewall_rule_t) * count) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return (int64_t)count;
+        }
+
+        case FW_CMD_ADD_RULE: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            if (!user_validate_pointer((void *)arg1, sizeof(firewall_rule_t), false)) {
+                return SYS_ERR_EFAULT;
+            }
+            firewall_rule_t rule;
+            if (copy_from_user(&rule, (const void *)arg1, sizeof(rule)) < 0) return SYS_ERR_EFAULT;
+            int ret = firewall_add_rule(&rule);
+            if (ret < 0) return SYS_ERR_ENOSPC;
+            return (int64_t)ret;
+        }
+
+        case FW_CMD_DEL_RULE: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            uint32_t id = (uint32_t)arg1;
+            if (firewall_del_rule(id) != 0) return SYS_ERR_ENOENT;
+            return 0;
+        }
+
+        case FW_CMD_SET_POLICY: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            uint8_t dir = (uint8_t)arg1;
+            uint8_t pol = (uint8_t)arg2;
+            if (firewall_set_policy(dir, pol) != 0) return SYS_ERR_EINVAL;
+            return 0;
+        }
+
+        case FW_CMD_SET_ENABLED: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            bool en = (bool)arg1;
+            return (int64_t)firewall_set_enabled(en);
+        }
+
+        case FW_CMD_FLUSH: {
+            process_t *proc = process_get_current();
+            if (proc && proc->uid != 0 && !has_capability(proc, CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            return (int64_t)firewall_flush();
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     switch (num) {
         case SYS_WRITE:     return sys_handle_write(a1, a2, a3);
@@ -1519,6 +1755,8 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_BLK_WRITE:         return sys_handle_blk_write(a1, a2, (uint32_t)a3, a4);
         case SYS_BLK_FLUSH:         return sys_handle_blk_flush(a1);
         case SYS_STATVFS:           return sys_handle_statvfs(a1, a2);
+        case SYS_NET_CTRL:          return sys_handle_net_ctrl((uint32_t)a1, a2, a3);
+        case SYS_FIREWALL_OP:       return sys_handle_firewall_op((uint32_t)a1, a2, a3, a4);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2341,6 +2579,39 @@ int64_t sys_statvfs(const char *path, statvfs_t *buf) {
         : "=r"(ret)
         : "r"((uint64_t)path), "r"((uint64_t)buf)
         : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_net_ctrl(uint32_t cmd, uint64_t arg1, uint64_t arg2) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $77, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)cmd), "r"(arg1), "r"(arg2)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $78, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)cmd), "r"(arg1), "r"(arg2), "r"(arg3)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
     );
     return ret;
 }

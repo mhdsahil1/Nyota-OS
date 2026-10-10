@@ -1,6 +1,7 @@
 /* =============================================================================
  * Nyota OS — Transmission Control Protocol (TCP) Implementation
- * RFC 793 finite state machine, 3-way handshake, payload delivery, and connection teardown.
+ * RFC 793 finite state machine, 3-way handshake, payload delivery, retransmissions,
+ * window flow control, duplicate ACK handling, and connection teardown.
  * =========================================================================== */
 
 #include "net/tcp.h"
@@ -12,7 +13,7 @@
 #include "serial.h"
 
 void tcp_init(void) {
-    /* TCP initialization */
+    /* TCP subsystem initialization */
 }
 
 const char *tcp_state_to_str(tcp_state_t state) {
@@ -152,6 +153,8 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
             client->local_seq = 10000 + (uint32_t)timer_ticks();
             client->state = TCP_STATE_SYN_RECEIVED;
             client->is_bound = true;
+            client->remote_window = ntohs(tcp->window);
+            client->local_window = (uint16_t)(SOCKET_BUFFER_SIZE - client->rx_count);
 
             /* Add to listener's backlog */
             listener->backlog[listener->backlog_count++] = client;
@@ -160,10 +163,38 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
             tcp_send_packet(client->local_ip, client->local_port,
                             client->remote_ip, client->remote_port,
                             client->local_seq, client->remote_seq,
-                            TCP_FLAG_SYN | TCP_FLAG_ACK, 8192, NULL, 0);
+                            TCP_FLAG_SYN | TCP_FLAG_ACK, client->local_window, NULL, 0);
             client->local_seq++;
         }
         return 0;
+    }
+
+    /* Update window advertisement */
+    sock->remote_window = ntohs(tcp->window);
+    sock->local_window = (uint16_t)(SOCKET_BUFFER_SIZE - sock->rx_count);
+
+    /* ACK validation and retransmission queue clearance */
+    if (flags & TCP_FLAG_ACK) {
+        if (ack == sock->last_ack_received && payload_len == 0 && ack > 0) {
+            sock->dup_ack_count++;
+            if (sock->dup_ack_count == 3 && sock->tx_unacked_len > 0) {
+                /* Fast Retransmit */
+                tcp_send_packet(sock->local_ip, sock->local_port,
+                                sock->remote_ip, sock->remote_port,
+                                sock->unacked_seq, sock->remote_seq,
+                                TCP_FLAG_PSH | TCP_FLAG_ACK, sock->local_window,
+                                sock->tx_unacked_buf, sock->tx_unacked_len);
+                sock->last_tx_ms = timer_uptime_ms();
+            }
+        } else if (ack > sock->last_ack_received) {
+            sock->last_ack_received = ack;
+            sock->dup_ack_count = 0;
+            sock->retry_count = 0;
+            sock->rto_ms = 500;
+            if (ack >= sock->unacked_seq + sock->tx_unacked_len) {
+                sock->tx_unacked_len = 0;
+            }
+        }
     }
 
     /* 4. Active Connection State Machine */
@@ -177,7 +208,7 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
                 tcp_send_packet(sock->local_ip, sock->local_port,
                                 sock->remote_ip, sock->remote_port,
                                 sock->local_seq, sock->remote_seq,
-                                TCP_FLAG_ACK, 8192, NULL, 0);
+                                TCP_FLAG_ACK, sock->local_window, NULL, 0);
 
                 /* Wake connect() call */
                 socket_wake(sock);
@@ -208,12 +239,13 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
                     }
 
                     sock->remote_seq += (uint32_t)payload_len;
+                    sock->local_window = (uint16_t)(SOCKET_BUFFER_SIZE - sock->rx_count);
 
                     /* Send immediate ACK */
                     tcp_send_packet(sock->local_ip, sock->local_port,
                                     sock->remote_ip, sock->remote_port,
                                     sock->local_seq, sock->remote_seq,
-                                    TCP_FLAG_ACK, 8192, NULL, 0);
+                                    TCP_FLAG_ACK, sock->local_window, NULL, 0);
 
                     socket_wake(sock);
                 }
@@ -229,23 +261,33 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
 
             /* Deliver inbound payload bytes */
             if (payload_len > 0) {
-                for (size_t i = 0; i < payload_len; i++) {
-                    if (sock->rx_count < SOCKET_BUFFER_SIZE) {
-                        sock->rx_buf[sock->rx_head] = payload[i];
-                        sock->rx_head = (sock->rx_head + 1) % SOCKET_BUFFER_SIZE;
-                        sock->rx_count++;
+                /* Sequence check: accept only in-order segments */
+                if (seq == sock->remote_seq) {
+                    for (size_t i = 0; i < payload_len; i++) {
+                        if (sock->rx_count < SOCKET_BUFFER_SIZE) {
+                            sock->rx_buf[sock->rx_head] = payload[i];
+                            sock->rx_head = (sock->rx_head + 1) % SOCKET_BUFFER_SIZE;
+                            sock->rx_count++;
+                        }
                     }
+
+                    sock->remote_seq += (uint32_t)payload_len;
+                    sock->local_window = (uint16_t)(SOCKET_BUFFER_SIZE - sock->rx_count);
+
+                    /* Send immediate ACK */
+                    tcp_send_packet(sock->local_ip, sock->local_port,
+                                    sock->remote_ip, sock->remote_port,
+                                    sock->local_seq, sock->remote_seq,
+                                    TCP_FLAG_ACK, sock->local_window, NULL, 0);
+
+                    socket_wake(sock);
+                } else {
+                    /* Out of order: acknowledge current expected sequence number */
+                    tcp_send_packet(sock->local_ip, sock->local_port,
+                                    sock->remote_ip, sock->remote_port,
+                                    sock->local_seq, sock->remote_seq,
+                                    TCP_FLAG_ACK, sock->local_window, NULL, 0);
                 }
-
-                sock->remote_seq += (uint32_t)payload_len;
-
-                /* Send immediate ACK */
-                tcp_send_packet(sock->local_ip, sock->local_port,
-                                sock->remote_ip, sock->remote_port,
-                                sock->local_seq, sock->remote_seq,
-                                TCP_FLAG_ACK, 8192, NULL, 0);
-
-                socket_wake(sock);
             }
 
             /* Remote host initiated connection teardown (FIN) */
@@ -257,7 +299,7 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
                 tcp_send_packet(sock->local_ip, sock->local_port,
                                 sock->remote_ip, sock->remote_port,
                                 sock->local_seq, sock->remote_seq,
-                                TCP_FLAG_ACK, 8192, NULL, 0);
+                                TCP_FLAG_ACK, sock->local_window, NULL, 0);
 
                 socket_wake(sock);
             }
@@ -272,8 +314,9 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
                 tcp_send_packet(sock->local_ip, sock->local_port,
                                 sock->remote_ip, sock->remote_port,
                                 sock->local_seq, sock->remote_seq,
-                                TCP_FLAG_ACK, 8192, NULL, 0);
+                                TCP_FLAG_ACK, sock->local_window, NULL, 0);
                 sock->state = TCP_STATE_TIME_WAIT;
+                sock->time_wait_ms = timer_uptime_ms();
                 socket_wake(sock);
             }
             break;
@@ -284,8 +327,9 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
                 tcp_send_packet(sock->local_ip, sock->local_port,
                                 sock->remote_ip, sock->remote_port,
                                 sock->local_seq, sock->remote_seq,
-                                TCP_FLAG_ACK, 8192, NULL, 0);
-                sock->state = TCP_STATE_CLOSED;
+                                TCP_FLAG_ACK, sock->local_window, NULL, 0);
+                sock->state = TCP_STATE_TIME_WAIT;
+                sock->time_wait_ms = timer_uptime_ms();
                 socket_wake(sock);
             }
             break;
@@ -305,5 +349,47 @@ int tcp_receive(net_device_t *dev, uint32_t src_ip, uint32_t dest_ip, const void
 }
 
 void tcp_timer_tick(void) {
-    /* TCP Retransmission and state timeout handler */
+    uint64_t now = timer_uptime_ms();
+
+    for (int i = 0; i < socket_get_max(); i++) {
+        socket_t *sock = socket_get_by_id(i);
+        if (!sock || !sock->in_use || sock->type != SOCK_STREAM) continue;
+
+        /* 1. TIME_WAIT timeout cleanup (2000 ms) */
+        if (sock->state == TCP_STATE_TIME_WAIT) {
+            if (now - sock->time_wait_ms >= 2000) {
+                sock->state = TCP_STATE_CLOSED;
+                sock->in_use = false;
+                socket_wake(sock);
+            }
+            continue;
+        }
+
+        /* 2. Retransmission check */
+        if (sock->state == TCP_STATE_ESTABLISHED ||
+            sock->state == TCP_STATE_FIN_WAIT_1 ||
+            sock->state == TCP_STATE_LAST_ACK) {
+            if (sock->tx_unacked_len > 0) {
+                uint32_t rto = (sock->rto_ms > 0) ? sock->rto_ms : 500;
+                if (now - sock->last_tx_ms >= rto) {
+                    if (sock->retry_count >= 5) {
+                        /* Retransmission limit exceeded: reset connection */
+                        sock->state = TCP_STATE_CLOSED;
+                        socket_wake(sock);
+                    } else {
+                        sock->retry_count++;
+                        sock->rto_ms = rto * 2;
+                        if (sock->rto_ms > 8000) sock->rto_ms = 8000;
+                        sock->last_tx_ms = now;
+
+                        tcp_send_packet(sock->local_ip, sock->local_port,
+                                        sock->remote_ip, sock->remote_port,
+                                        sock->unacked_seq, sock->remote_seq,
+                                        TCP_FLAG_PSH | TCP_FLAG_ACK, sock->local_window,
+                                        sock->tx_unacked_buf, sock->tx_unacked_len);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "process.h"
+#include "spinlock.h"
 
 #define MAX_TTYS            4
 
@@ -44,6 +45,7 @@ typedef struct tty {
     bool     eof_pending;
 
     process_t *waiters;
+    spinlock_t lock;
 } tty_t;
 
 void tty_init(void);
