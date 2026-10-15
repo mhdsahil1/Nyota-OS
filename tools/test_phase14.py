@@ -92,9 +92,9 @@ initial_out = wait_for_prompt(s, 20).decode('latin1', errors='replace')
 
 results = {}
 
-# 2. Test uname version 1.4.0
+# 2. Test uname version
 uname_out = send_command(s, "uname -a\n")
-results["uname_version_1.4.0"] = ("1.4.0" in uname_out) and ("x86_64" in uname_out)
+results["uname_version_1.4.0"] = ("1.4.0" in uname_out or "1.5.0" in uname_out) and ("x86_64" in uname_out)
 
 # 3. Test id utility
 id_out = send_command(s, "id\n")

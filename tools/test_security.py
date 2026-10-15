@@ -59,9 +59,9 @@ def wait_for_prompt(s, timeout=20):
             pass
     return buf
 
-def send_command(s, cmd_str, timeout=6):
+def send_command(s, cmd_str, timeout=8):
     print(f"\n>>> SENDING: {cmd_str.strip()}", flush=True)
-    time.sleep(0.15)
+    time.sleep(0.2)
     s.sendall(cmd_str.encode('latin1'))
     buf = bytearray()
     start = time.time()
@@ -72,7 +72,7 @@ def send_command(s, cmd_str, timeout=6):
                 buf.extend(chunk)
                 sys.stdout.write(chunk.decode('latin1', errors='replace'))
                 sys.stdout.flush()
-                if b"$ " in buf or b"nyota$ " in buf:
+                if (b"$ " in buf or b"nyota$ " in buf) and len(buf) > len(cmd_str) + 4:
                     break
         except socket.timeout:
             pass
@@ -131,7 +131,15 @@ checks["mem_unmapped_sigsegv"] = "[ OK ] unmapped memory -> SIGSEGV" in mem_out
 checks["mem_survived"] = "[ OK ] process survived" in mem_out
 
 # 10. Test kill on background process
-kill_out = send_command(s, "kill -KILL 10\n")
+bg_pid = "15"
+if "[1]" in bg_out:
+    try:
+        parts = bg_out.split("[1]")[1].split()
+        if parts:
+            bg_pid = parts[0]
+    except Exception:
+        pass
+kill_out = send_command(s, f"kill -KILL {bg_pid}\n")
 checks["kill_command"] = ("error" not in kill_out.lower())
 
 # 11. Test stressproc

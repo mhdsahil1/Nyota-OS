@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
     memset(term_lines, 0, sizeof(term_lines));
     memset(input_line, 0, sizeof(input_line));
 
-    term_print("Nyota OS Graphical Terminal v1.4.0 (x86_64)\n");
+    term_print("Nyota OS Graphical Terminal v1.5.0 (x86_64)\n");
     term_print("Type commands or 'exit' to close.\n\n");
     term_print("nyota$ ");
 

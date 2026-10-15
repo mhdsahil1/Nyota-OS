@@ -84,6 +84,7 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
 
     /* 3. Read and Process Program Headers */
     bool has_loadable_segment = false;
+    bool entry_in_exec_segment = false;
 
     for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
         Elf64_Phdr phdr;
@@ -181,6 +182,10 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
             bytes_to_copy -= chunk;
         }
 
+        if ((phdr.p_flags & PF_X) && ehdr.e_entry >= phdr.p_vaddr && ehdr.e_entry < phdr.p_vaddr + phdr.p_memsz) {
+            entry_in_exec_segment = true;
+        }
+
         /* Note: BSS is already zeroed because newly allocated pages are zeroed with memset */
     }
 
@@ -189,7 +194,8 @@ int elf_load_executable(nyota_fs_t *fs, uint64_t inode_num, page_table_t *pml4, 
     }
 
     /* Validate entry point */
-    if (ehdr.e_entry < USER_SPACE_BASE || ehdr.e_entry >= USER_SPACE_END) {
+    if (ehdr.e_entry < USER_SPACE_BASE || ehdr.e_entry >= USER_SPACE_END || !entry_in_exec_segment) {
+        kwarn("elf_load: entry point invalid or not in executable segment");
         return NYOTA_ENOEXEC;
     }
 

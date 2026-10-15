@@ -247,6 +247,8 @@ process_t *process_create(const char *name, uint64_t entry_point, const void *co
     proc->context_switches = 0;
     proc->cpu_affinity = 0xFFFFFFFFFFFFFFFFULL;
     proc->current_cpu = 0;
+    proc->heap_start = USER_HEAP_BASE;
+    proc->heap_end = USER_HEAP_BASE;
 
     if (name) {
         size_t nlen = strlen(name);
@@ -440,6 +442,8 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
     }
 
     proc->entry_point = entry_point;
+    proc->heap_start = USER_HEAP_BASE;
+    proc->heap_end = USER_HEAP_BASE;
 
     /* Populate environment block */
     if (envp && envp[0]) {
@@ -530,6 +534,9 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
         proc->controlling_tty = 0;
         proc->cwd[0] = '/';
         proc->cwd[1] = '\0';
+    }
+    if (strcmp(proc->name, "nyotapkg") == 0) {
+        proc->capabilities |= CAP_SYS_ADMIN;
     }
     proc->start_time = timer_uptime_sec();
 
@@ -778,6 +785,21 @@ void process_exit(int status) {
 
         /* Clean up attached shared memory */
         shm_process_cleanup(curr);
+
+        /* Clean up allocated heap memory */
+        if (curr->heap_end > curr->heap_start && curr->cr3) {
+            page_table_t *pml4 = (page_table_t *)curr->cr3;
+            uint64_t h_start = PAGE_ALIGN_DOWN(curr->heap_start);
+            uint64_t h_end = PAGE_ALIGN_UP(curr->heap_end);
+            for (uint64_t p = h_start; p < h_end; p += PAGE_SIZE) {
+                uint64_t phys = paging_get_physical_in(pml4, p);
+                if (phys != 0) {
+                    pmm_free_page((void *)phys);
+                    paging_unmap_page_in(pml4, p);
+                }
+            }
+            curr->heap_end = curr->heap_start;
+        }
 
         /* Clean up GUI windows owned by this process */
         extern void window_on_process_exit(uint32_t pid);

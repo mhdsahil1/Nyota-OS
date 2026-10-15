@@ -233,7 +233,9 @@ USER_BINARIES := \
     fs/root/bin/id          \
     fs/root/bin/whoami      \
     fs/root/bin/auditlog    \
-    fs/root/bin/sectest
+    fs/root/bin/sectest     \
+    fs/root/bin/devdemo     \
+    fs/root/bin/nyotapkg
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4
@@ -242,7 +244,7 @@ QEMU_DRIVE_FLAGS := -drive format=raw,file=$(IMAGE),index=0,media=disk -drive fo
 QEMU_NET_FLAGS   := -netdev user,id=net0,hostfwd=tcp::8080-:8080 -device e1000,netdev=net0
 
 # ── Phony Targets ─────────────────────────────────────────────────────────────
-.PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help user fs disk
+.PHONY: all run run-debug run-serial memtest scheduler-test stress-test debug clean rebuild help user fs disk sdk
 
 # Default target: build bootable kernel image and NyotaFS filesystem disk
 all: $(IMAGE) $(DATA_IMAGE)
@@ -254,6 +256,8 @@ all: $(IMAGE) $(DATA_IMAGE)
 	@echo.
 
 user: $(USER_BINARIES)
+sdk: user build/crt0.o $(LIBNYOTA)
+	@python tools/exportsdk.py
 fs: $(DATA_IMAGE)
 disk: $(DATA_IMAGE)
 
@@ -275,7 +279,10 @@ $(MKNYOTAFS): tools/mknyotafs.c | $(BUILD_DIR)
 	@$(CC) -O2 $< -o $@
 
 # ── Build NyotaFS Persistent Disk Image ───────────────────────────────────────
-$(DATA_IMAGE): $(MKNYOTAFS) $(USER_BINARIES) fs/root/etc/nyota.conf fs/root/home/welcome.txt | $(BUILD_DIR)
+fs/root/pkg/devdemo.npk: fs/root/bin/devdemo tools/mkpkg.py
+	@python tools/mkpkg.py create $@ --name devdemo --version 1.5.0 --desc "Nyota Developer Platform Test Suite" --author "Nyota Developers" --file bin/devdemo=fs/root/bin/devdemo
+
+$(DATA_IMAGE): $(MKNYOTAFS) $(USER_BINARIES) fs/root/pkg/devdemo.npk fs/root/etc/nyota.conf fs/root/home/welcome.txt | $(BUILD_DIR)
 	@echo [FS]    $(DATA_IMAGE)
 	@$(MKNYOTAFS) fs/root $(DATA_IMAGE) 16
 
@@ -300,7 +307,15 @@ $(BUILD_DIR)/lib_env.o: user/libnyota/env.c | $(BUILD_DIR)
 	@echo [BUILD] user/libnyota/env.c
 	@$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/lib_io.o $(BUILD_DIR)/lib_env.o
+$(BUILD_DIR)/lib_malloc.o: user/libnyota/malloc.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/malloc.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lib_dir.o: user/libnyota/dir.c | $(BUILD_DIR)
+	@echo [BUILD] user/libnyota/dir.c
+	@$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(LIBNYOTA): $(BUILD_DIR)/lib_syscall.o $(BUILD_DIR)/lib_string.o $(BUILD_DIR)/lib_io.o $(BUILD_DIR)/lib_env.o $(BUILD_DIR)/lib_malloc.o $(BUILD_DIR)/lib_dir.o
 	@echo [LIB]   $@
 	@$(AR) rcs $@ $^
 

@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
         gui_draw_rect(win, 12, 12, ABOUT_WIDTH - 24, 60, COLOR_ACCENT_PRIMARY);
 
         gui_draw_text(win, 24, 22, "N Y O T A   O S", COLOR_ACCENT_PRIMARY, 0);
-        gui_draw_text(win, 24, 42, "Version 1.4.0 (Security Architecture & Kernel Hardening)", COLOR_TITLE_ACTIVE, 0);
+        gui_draw_text(win, 24, 42, "Version 1.5.0 (Developer Platform & C Runtime)", COLOR_TITLE_ACTIVE, 0);
 
         /* Subsystems Card */
         int cy = 84;

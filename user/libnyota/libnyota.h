@@ -63,11 +63,30 @@ typedef struct {
     uint64_t modified;
 } stat_t;
 
-typedef struct {
-    uint64_t inode;
-    uint8_t  type;
-    char     name[NYOTA_NAME_MAX];
+typedef struct dirent {
+    union {
+        uint64_t inode;
+        uint64_t d_ino;
+    };
+    union {
+        uint8_t  type;
+        uint8_t  d_type;
+    };
+    union {
+        char     name[NYOTA_NAME_MAX];
+        char     d_name[NYOTA_NAME_MAX];
+    };
 } dirent_t;
+
+typedef struct DIR {
+    int fd;
+    dirent_t cur_entry;
+} DIR;
+
+DIR      *opendir(const char *name);
+dirent_t *readdir(DIR *dirp);
+int       closedir(DIR *dirp);
+void      rewinddir(DIR *dirp);
 
 /* System Calls */
 int64_t write(int fd, const void *buf, size_t count);
@@ -77,7 +96,14 @@ int close(int fd);
 int64_t seek(int fd, int64_t offset, int whence);
 int stat(const char *path, stat_t *st);
 int getdents(int fd, dirent_t *dirp);
+#define F_OK            0
+#define X_OK            1
+#define W_OK            2
+#define R_OK            4
+
+int access(const char *path, int mode);
 int mkdir(const char *path, int mode);
+int unlink(const char *path);
 void exit(int status) __attribute__((noreturn));
 int getpid(void);
 void yield(void);
@@ -657,6 +683,14 @@ char *getenv(const char *name);
 int   setenv(const char *name, const char *value, int overwrite);
 int   unsetenv(const char *name);
 
+/* Dynamic Memory Allocation & Heap */
+void *malloc(size_t size);
+void  free(void *ptr);
+void *calloc(size_t nmemb, size_t size);
+void *realloc(void *ptr, size_t size);
+int   brk(void *addr);
+void *sbrk(intptr_t increment);
+
 /* String & Memory Functions */
 size_t strlen(const char *s);
 int strcmp(const char *s1, const char *s2);
@@ -668,17 +702,49 @@ char *strncat(char *dest, const char *src, size_t n);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strstr(const char *haystack, const char *needle);
+char *strdup(const char *s);
+char *strndup(const char *s, size_t n);
+char *strtok(char *str, const char *delim);
+char *strtok_r(char *str, const char *delim, char **saveptr);
+size_t strspn(const char *s, const char *accept);
+size_t strcspn(const char *s, const char *reject);
 int   atoi(const char *s);
+long  atol(const char *s);
+long  strtol(const char *nptr, char **endptr, int base);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
+int   memcmp(const void *s1, const void *s2, size_t n);
+
+/* Character Classification & Conversion (ctype) */
+int isspace(int c);
+int isdigit(int c);
+int isalpha(int c);
+int isalnum(int c);
+int isprint(int c);
+int isupper(int c);
+int islower(int c);
+int toupper(int c);
+int tolower(int c);
 
 /* Standard I/O Functions */
+#ifndef _VA_LIST_DEFINED
+#define _VA_LIST_DEFINED
+typedef __builtin_va_list va_list;
+#define va_start(v, l)  __builtin_va_start(v, l)
+#define va_end(v)       __builtin_va_end(v)
+#define va_arg(v, l)    __builtin_va_arg(v, l)
+#define va_copy(d, s)   __builtin_va_copy(d, s)
+#endif
+
 int putchar(int c);
 int puts(const char *s);
 int getchar(void);
 int getline(char *buf, size_t size);
 int printf(const char *format, ...);
 int snprintf(char *str, size_t size, const char *format, ...);
+int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+int fprintf(int fd, const char *format, ...);
+int dprintf(int fd, const char *format, ...);
 
 #endif /* LIBNYOTA_H */

@@ -165,3 +165,51 @@
 - [x] Complete regression validation: `test_security.py` (25/25), `test_phase10.py` (24/24), `test_network.py` (100%)
 - [x] Comprehensive architectural documentation in `docs/smp.md`
 
+## Phase 12: Modern Storage Architecture, Block Layer & PCI Discovery
+- [x] Unified Block Device Layer (`block_device_t`) with standardized bio read/write/flush interfaces
+- [x] PCI Bus Enumeration (Configuration Space ports `0xCF8`/`0xCFC`) and device class identification
+- [x] AHCI SATA Controller Driver (`drivers/ahci.c`) with ABAR MMIO, HBA port detection, and FIS command issuance
+- [x] NVMe Controller Driver (`drivers/nvme.c`) with Admin & I/O submission/completion queue pairs and PRP entry handling
+- [x] Partition Discovery Engine (`kernel/storage/partition.c`) supporting both legacy MBR and modern GUID Partition Tables (GPT)
+- [x] LRU Block Buffer Cache Subsystem (`kernel/storage/cache.c`) with dirty writeback and synchronized flushing
+- [x] Storage Diagnostic Utilities: `/bin/lspci`, `/bin/lsblk`, `/bin/diskinfo`, and `/bin/disktest`
+- [x] System Calls: `SYS_PCI_INFO` (71), `SYS_BLK_INFO` (72), `SYS_BLK_READ` (73), `SYS_BLK_WRITE` (74), `SYS_BLK_FLUSH` (75), `SYS_STATVFS` (76)
+- [x] Automated test suite `tools/test_phase12.py` passing 28/28 (100%)
+
+## Phase 13: Advanced Networking & Network Security
+- [x] Dynamic DHCPv4 Client (`/bin/dhclient`) implementing RFC 2131 (DISCOVER, OFFER, REQUEST, ACK) with transaction-ID validation
+- [x] Native IPv6 Subsystem with 128-bit address structures, SLAAC EUI-64 generation, ICMPv6 Echo, NDP (NS/NA), and multicast Ethernet mapping
+- [x] TCP Reliability & Flow Control: connection retransmission queues with exponential backoff timers, 3-duplicate-ACK Fast Retransmit, and sliding window advertisement
+- [x] Dynamic Kernel Routing Engine (`kernel/net/route.c`) supporting LPM route lookup and dynamic manipulation via `/bin/ip route`
+- [x] Packet-Filtering Firewall Subsystem (`kernel/net/firewall.c`) with atomic rule evaluation, connection state tracking, and management via `/bin/nyfw`
+- [x] Enhanced DNS resolver parsing `/etc/hosts` and `/etc/resolv.conf` with compression pointer loop defenses in `/bin/nslookup`
+- [x] Automated test suite `tools/test_phase13.py` passing 33/33 (100%)
+
+## Phase 14: Security Architecture & Kernel Hardening
+- [x] Hardware Memory Protection: `EFER.NXE` enabled, `CR0.WP` supervisor write-protection active, strict $W \oplus X$ policy
+- [x] User & Group Credentials: `uid`, `euid`, `gid`, `egid` tracking, privilege drop in `logind` to UID 1000, permission checks across syscalls
+- [x] Discretionary Access Control (DAC): VFS inode mode bits (`0777`) verification, root bypass for EUID 0, protected `/etc/shadow` (`0600`)
+- [x] Discrete Capability System: 64-bit capability masks authorizing privileged operations (`CAP_NET_ADMIN`, `CAP_FIREWALL`, etc.)
+- [x] Syscall Filtering Sandbox (`SYS_SET_SYSCALL_FILTER` 83) with per-process locked allowlist/denylist bitmasks
+- [x] Secure Authentication: SHA-256 password hashing in `/etc/shadow` and constant-time comparison (`crypto_memcmp`)
+- [x] Security Event Auditing: circular ring buffer capturing denials and unauthorized privilege operations (`/bin/auditlog`)
+- [x] Verification: `/bin/sectest` (19/19), `tools/test_phase14.py` (33/33), `tools/test_security.py` (25/25)
+
+## Phase 15: Developer Platform
+- [x] C Standard Library (`libnyota`): 16-byte aligned `malloc()`, `free()`, `calloc()`, and `realloc()` with chunk header splitting and bidirectional coalescing
+- [x] POSIX-Inspired Directory Streaming: `opendir()`, `readdir()`, `closedir()`, and `rewinddir()` with anonymous union `dirent_t` compatibility
+- [x] String & CType Utilities: `strdup()`, `strndup()`, `strtok_r()`, `strtol()`, `atol()`, `memcmp()`, `strspn()`, `strcspn()`, and complete ctype suite
+- [x] Formatted I/O & File Operations: `vsnprintf()`, `snprintf()`, `fprintf()`, `dprintf()`, and `access()`
+- [x] User Heap Syscall Interface: `SYS_BRK` (85) and `SYS_SBRK` (86) with page-aligned PMM allocation/mapping (`PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX`)
+- [x] Automatic User Heap Reclamation: physical frames systematically freed on `process_exit()`
+- [x] Hardened Static 64-bit ELF Loading: entry point verification in executable segments (`PF_X`) and strict BSS zeroing
+- [x] Developer SDK: populated standalone SDK tree (`sdk/`) with headers, libraries, linker script, and `make sdk` target
+- [x] Cross-Compiler Driver: `tools/nyotacc` driver with `.py`, shell, and batch wrappers for reproducible native application compilation
+- [x] Native Package Manager: `/bin/nyotapkg` command suite (`info`, `install`, `list`, `remove`) and host packager `tools/mkpkg.py`
+- [x] Package Security: path traversal sanitization (rejection of `..`, leading `/`, drive colons) and target prefix enforcement (`bin/`, `etc/`, `share/`, `lib/`, `usr/`)
+- [x] Package Database: persistent manifest registration under `/var/lib/pkg/installed/<name>.list`
+- [x] Native Sample Verification Application: `/bin/devdemo` testing memory allocation, string utilities, directory streaming, and file I/O
+- [x] Automated Test Suite: `tools/test_phase15.py` validating system boot, `v1.5.0` uname, `devdemo` execution, and package manager operations
+- [x] Version Bump: system metadata, headers, drivers, and user applications updated to `v1.5.0`
+
+

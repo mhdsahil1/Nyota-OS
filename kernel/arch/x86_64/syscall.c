@@ -1094,7 +1094,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.4.0", 5);
+    memcpy(info.kernel_ver, "1.5.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1742,6 +1742,97 @@ static int64_t sys_handle_firewall_op(uint32_t cmd, uint64_t arg1, uint64_t arg2
     }
 }
 
+static int64_t sys_handle_brk(uint64_t new_brk) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EFAULT;
+
+    if (curr->heap_start == 0) {
+        curr->heap_start = USER_HEAP_BASE;
+        curr->heap_end = curr->heap_start;
+    }
+
+    if (new_brk == 0) {
+        return (int64_t)curr->heap_end;
+    }
+
+    if (new_brk < curr->heap_start) {
+        return SYS_ERR_EINVAL;
+    }
+
+    if (new_brk >= USER_STACK_TOP - 0x100000ULL || new_brk >= USER_SPACE_END) {
+        return SYS_ERR_ENOMEM;
+    }
+
+    if (curr->max_memory > 0 && (new_brk - curr->heap_start) > curr->max_memory) {
+        return SYS_ERR_ENOMEM;
+    }
+
+    page_table_t *pml4 = (page_table_t *)curr->cr3;
+    if (!pml4) return SYS_ERR_EFAULT;
+
+    if (new_brk > curr->heap_end) {
+        uint64_t start_page = PAGE_ALIGN_UP(curr->heap_end);
+        uint64_t end_page = PAGE_ALIGN_UP(new_brk);
+
+        for (uint64_t p = start_page; p < end_page; p += PAGE_SIZE) {
+            uint64_t phys = paging_get_physical_in(pml4, p);
+            if (phys == 0) {
+                void *frame = pmm_alloc_page();
+                if (!frame) {
+                    for (uint64_t rb = start_page; rb < p; rb += PAGE_SIZE) {
+                        uint64_t rb_phys = paging_get_physical_in(pml4, rb);
+                        if (rb_phys) pmm_free_page((void *)rb_phys);
+                        paging_unmap_page_in(pml4, rb);
+                    }
+                    return SYS_ERR_ENOMEM;
+                }
+                memset(frame, 0, PAGE_SIZE);
+                if (!paging_map_page_in(pml4, p, (uint64_t)frame, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX)) {
+                    pmm_free_page(frame);
+                    return SYS_ERR_ENOMEM;
+                }
+            }
+        }
+    } else if (new_brk < curr->heap_end) {
+        uint64_t start_page = PAGE_ALIGN_UP(new_brk);
+        uint64_t end_page = PAGE_ALIGN_UP(curr->heap_end);
+
+        for (uint64_t p = start_page; p < end_page; p += PAGE_SIZE) {
+            uint64_t phys = paging_get_physical_in(pml4, p);
+            if (phys != 0) {
+                pmm_free_page((void *)phys);
+                paging_unmap_page_in(pml4, p);
+            }
+        }
+    }
+
+    curr->heap_end = new_brk;
+    return (int64_t)new_brk;
+}
+
+static int64_t sys_handle_sbrk(int64_t inc) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_EFAULT;
+
+    if (curr->heap_start == 0) {
+        curr->heap_start = USER_HEAP_BASE;
+        curr->heap_end = curr->heap_start;
+    }
+
+    uint64_t old_brk = curr->heap_end;
+    if (inc == 0) {
+        return (int64_t)old_brk;
+    }
+
+    uint64_t new_brk = (uint64_t)((int64_t)old_brk + inc);
+    int64_t res = sys_handle_brk(new_brk);
+    if (res < 0) {
+        return res;
+    }
+
+    return (int64_t)old_brk;
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     process_t *curr = process_get_current();
     if (curr && curr->syscall_filter_enabled) {
@@ -1844,6 +1935,8 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_SETEGID:           return sys_handle_setegid((uint32_t)a1);
         case SYS_SET_SYSCALL_FILTER: return sys_handle_set_syscall_filter((uint8_t)a1, a2, a3);
         case SYS_AUDIT_LOG:         return kernel_audit_log_op((uint32_t)a1, (void *)a2, (size_t)a3);
+        case SYS_BRK:               return sys_handle_brk(a1);
+        case SYS_SBRK:              return sys_handle_sbrk((int64_t)a1);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2787,5 +2880,34 @@ int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count) {
         : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
     );
     return ret;
+}
+
+int64_t sys_brk(uint64_t addr) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $85, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"(addr)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+void *sys_sbrk(intptr_t increment) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov $86, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)increment)
+        : "rax", "rdi", "rcx", "r11", "memory"
+    );
+    if (ret < 0) return (void *)-1;
+    return (void *)ret;
 }
 

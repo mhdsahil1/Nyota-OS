@@ -13,7 +13,36 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.4.0** is a bootable x86_64 hobby operating system featuring a comprehensive security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v1.5.0** is a bootable x86_64 hobby operating system featuring a native Developer Platform (dynamic heap allocation via `malloc`/`free`, directory streaming via `opendir`/`readdir`, string & formatting libc utilities, `nyotacc` cross-compiler driver, standalone SDK, and `nyotapkg` package manager), a comprehensive security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 15: Developer Platform
+
+Phase 15 transforms Nyota OS into an open native developer platform where developers can build, compile, package, install, and execute native C applications using a reproducible, documented workflow:
+- **C Standard Library (`libnyota`)**:
+  - **Dynamic Memory Allocation**: 16-byte aligned `malloc()`, `free()`, `calloc()`, and `realloc()` backed by `sbrk()`, featuring chunk splitting and bidirectional coalescing to eliminate heap fragmentation.
+  - **Directory Streaming**: POSIX-inspired `opendir()`, `readdir()`, `closedir()`, and `rewinddir()` providing standard filesystem traversal with anonymous union support for both POSIX `dirent` and NyotaFS fields.
+  - **String & CType Utilities**: `strdup`, `strndup`, `strtok_r`, `strtol`, `atol`, `memcmp`, `strspn`, `strcspn`, and full character classification suite (`isalpha`, `isdigit`, `isspace`, `isalnum`, `isprint`, `toupper`, `tolower`).
+  - **Formatted I/O & File Operations**: `vsnprintf`, `snprintf`, `fprintf`, `dprintf`, and `access()`.
+- **System Call ABI & User Heap Management**:
+  - `SYS_BRK` (85) and `SYS_SBRK` (86) managing dynamic user heap growth from `USER_HEAP_BASE` (`0x0000008002000000ULL`) up to the user stack guard boundary.
+  - On-demand physical page allocation from the PMM, page table mapping (`PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE | PAGE_NX`), and automatic physical frame reclamation upon process termination.
+- **Hardened Executable Support**:
+  - Static 64-bit ELF executable loading strictly verifying entry point location within an executable segment (`PF_X`).
+  - BSS zeroing and memory isolation with hardware $W \oplus X$ enforcement.
+  - Explicit architectural honesty: static ELF linking is supported; dynamic linking (`.so`) remains deliberately unsupported until runtime relocation and demand paging are implemented.
+- **Cross-Compiler Toolchain & SDK**:
+  - Cross-compiler driver `tools/nyotacc` (with `.py`, shell, and batch wrappers) automating compilation flags, include search paths, `crt0.o` entry stub, and `user.ld` linker script.
+  - Standalone SDK directory (`sdk/`) populated automatically via `make sdk` containing `include/libnyota.h`, `include/types.h`, `lib/crt0.o`, `lib/libnyota.a`, `user.ld`, and documentation.
+- **Native Package Manager (`nyotapkg`)**:
+  - `/bin/nyotapkg` command suite: `info`, `install`, `list`, `remove`, and `help`.
+  - Host packaging tool `tools/mkpkg.py` building `.npk` binary package archives.
+  - Robust security defenses against path traversal (`..`, leading `/`, drive colons) enforcing approved target directories (`bin/`, `etc/`, `share/`, `lib/`, `usr/`).
+  - Persistent installation tracking database at `/var/lib/pkg/installed/<name>.list`.
+- **Automated Verification**:
+  - In-guest sample test suite `/bin/devdemo` testing libc memory, string, directory streaming, formatting, and file APIs.
+  - Automated test runner `tools/test_phase15.py` validating system boot, `v1.5.0` uname metadata, `devdemo` execution, and full package lifecycle (`info`, `install`, `list`, `remove`).
+
+See [docs/developer-platform.md](docs/developer-platform.md) and [docs/sdk.md](docs/sdk.md) for full developer platform specifications.
 
 ## Phase 14: Security Architecture & Kernel Hardening
 
@@ -1614,7 +1643,7 @@ Phase 9: Advanced Userland & System Services     ◄ [COMPLETED]
    ├── Advanced Shell & Job Control (tcgetattr, foreground/background process groups)
    └── System Timekeeping & Real-Time Clock (RTC CMOS, uptime, gettimeofday)
 
-Phase 10: Graphical User Interface & Desktop Environment ◄ [IMPLEMENTED]
+Phase 10: Graphical User Interface & Desktop Environment ◄ [COMPLETED]
    ├── VBE framebuffer handoff, validated mapping, 32-bit pixel format and software back buffer
    ├── Clipped graphics primitives, bitmap font, and graphical initialization screen
    ├── PS/2 keyboard and mouse normalization into bounded input events
@@ -1624,6 +1653,44 @@ Phase 10: Graphical User Interface & Desktop Environment ◄ [IMPLEMENTED]
    ├── Native Terminal, Files, Editor, System Monitor, Settings, and About applications
    ├── PID 1 desktop service startup, application window cleanup, and text-mode fallback
    └── Release version 1.0.0; Phase 10 integration 24/24 and security regression 25/25
+
+Phase 11: Symmetric Multiprocessing (SMP) & Multicore Execution ◄ [COMPLETED]
+   ├── ACPI MADT / LAPIC / IOAPIC Discovery & MP Initialization Protocol (INIT-SIPI-SIPI)
+   ├── Per-CPU Data Structures, LAPIC Timers & Inter-Processor Interrupts (IPIs)
+   ├── Core-Affinity Scheduler & Spinlock Concurrency Model
+   └── Multicore Stress & Verification (/bin/smp, /bin/smpstress)
+
+Phase 12: Modern Storage Architecture, Block Layer & PCI Discovery ◄ [COMPLETED]
+   ├── Unified Block Layer Abstraction (block_device_t, bio requests)
+   ├── AHCI SATA Controller & NVMe Controller Support
+   ├── MBR & GPT Partition Discovery Engines
+   ├── LRU Block Buffer Cache Subsystem
+   └── Storage Diagnostic Utilities (/bin/lspci, /bin/lsblk, /bin/diskinfo, /bin/disktest)
+
+Phase 13: Advanced Networking & Network Security ◄ [COMPLETED]
+   ├── DHCPv4 Dynamic Host Configuration Client (/bin/dhclient)
+   ├── Native IPv6 Subsystem, SLAAC (EUI-64), NDP & Multicast
+   ├── TCP Reliability, Retransmission Timers & Flow Control
+   ├── Dynamic Kernel Routing Engine & LPM Lookup (/bin/ip route)
+   └── Packet-Filtering Firewall Subsystem & CLI (/bin/nyfw)
+
+Phase 14: Security Architecture & Kernel Hardening ◄ [COMPLETED]
+   ├── Hardware Memory Protection (EFER.NXE No-Execute, CR0.WP Write Protect, W^X)
+   ├── Process Credentials (UID/GID/EUID/EGID) & Access Control
+   ├── Discrete Capability Model (CAP_NET_ADMIN, CAP_FIREWALL, CAP_SYS_ADMIN, etc.)
+   ├── Per-Process Syscall Filtering Sandbox (Allowlist / Denylist)
+   ├── SHA-256 Shadow Authentication & Constant-Time Crypto Verification
+   └── Security Event Auditing Ring Buffer & Tool (/bin/auditlog, /bin/sectest)
+
+Phase 15: Developer Platform ◄ [COMPLETED]
+   ├── C Standard Library: 16-byte aligned malloc/free/calloc/realloc, chunk coalescing
+   ├── POSIX-inspired Directory Streaming: opendir, readdir, rewinddir, closedir
+   ├── String & CType Utilities: strdup, strtok_r, strtol, atol, memcmp, ctype suite
+   ├── System APIs: SYS_BRK (85) & SYS_SBRK (86), user heap page-aligned allocation/reclamation
+   ├── Hardened Executable Support: Static 64-bit ELF entry point validation & BSS zeroing
+   ├── Developer Cross-Compiler Toolchain (tools/nyotacc) & Standalone SDK (sdk/)
+   ├── Native Package Manager: nyotapkg & host tools/mkpkg.py (.npk archives, traversal defenses)
+   └── Automated Verification: /bin/devdemo & tools/test_phase15.py suite
 ```
 
 ---

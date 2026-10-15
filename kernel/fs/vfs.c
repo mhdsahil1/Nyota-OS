@@ -344,14 +344,18 @@ int vfs_open(const char *path, int flags, int mode) {
             if (strncmp(path, "/bin/", 5) == 0 || strncmp(path, "bin/", 4) == 0 ||
                 strncmp(path, "/etc/", 5) == 0 || strncmp(path, "etc/", 4) == 0 ||
                 strncmp(path, "/kernel", 7) == 0 || strncmp(path, "kernel", 6) == 0) {
-                audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized sysdir write");
-                return NYOTA_EACCES;
+                if (!has_capability(curr, CAP_SYS_ADMIN)) {
+                    audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized sysdir write");
+                    return NYOTA_EACCES;
+                }
             }
         }
 
         uint32_t perms = inode.mode & 0777;
         bool allowed = false;
-        if (curr->euid == inode.uid || curr->uid == inode.uid) {
+        if (has_capability(curr, CAP_SYS_ADMIN)) {
+            allowed = true;
+        } else if (curr->euid == inode.uid || curr->uid == inode.uid) {
             bool ok = true;
             if (need_read && !(perms & 0400)) ok = false;
             if (need_write && !(perms & 0200)) ok = false;
@@ -391,6 +395,11 @@ int vfs_open(const char *path, int flags, int mode) {
         f->offset = inode.size;
     } else {
         f->offset = 0;
+    }
+
+    if ((flags & O_TRUNC) && f->type == FILE_TYPE_REGULAR) {
+        inode.size = 0;
+        nyotafs_write_inode(&root_filesystem, inode_num, &inode);
     }
 
     int fd = vfs_alloc_fd(curr->fds, f);
@@ -565,6 +574,14 @@ int64_t vfs_write(int fd, const void *buf, size_t count) {
 int64_t vfs_seek(int fd, int64_t offset, int whence) {
     file_t *f = get_process_file(fd);
     if (!f) return NYOTA_EBADF;
+
+    if (f->type == FILE_TYPE_DIR) {
+        if (whence == 0 /* SEEK_SET */ && offset >= 0) {
+            f->offset = (uint64_t)offset;
+            return (int64_t)f->offset;
+        }
+        return NYOTA_EINVAL;
+    }
 
     if (f->type != FILE_TYPE_REGULAR) {
         return NYOTA_EINVAL;
@@ -844,8 +861,10 @@ int vfs_unlink(const char *path) {
         if (strncmp(use_path, "/bin/", 5) == 0 || strncmp(use_path, "bin/", 4) == 0 ||
             strncmp(use_path, "/etc/", 5) == 0 || strncmp(use_path, "etc/", 4) == 0 ||
             strncmp(use_path, "/kernel", 7) == 0 || strncmp(use_path, "kernel", 6) == 0) {
-            audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized unlink");
-            return NYOTA_EACCES;
+            if (!has_capability(curr, CAP_SYS_ADMIN)) {
+                audit_log_event(AUDIT_SEV_DENIED, "PERM", curr->pid, curr->euid, "unauthorized unlink");
+                return NYOTA_EACCES;
+            }
         }
     }
 

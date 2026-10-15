@@ -95,6 +95,8 @@
 #define SYS_SETEGID           82
 #define SYS_SET_SYSCALL_FILTER 83
 #define SYS_AUDIT_LOG         84
+#define SYS_BRK               85
+#define SYS_SBRK              86
 
 /* SMP Information Data Structures */
 typedef struct {
@@ -274,5 +276,7 @@ uint32_t sys_getegid(void);
 int64_t sys_setegid(uint32_t egid);
 int64_t sys_set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1);
 int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count);
+int64_t sys_brk(uint64_t addr);
+void   *sys_sbrk(intptr_t increment);
 
 #endif /* NYOTA_SYSCALL_H */

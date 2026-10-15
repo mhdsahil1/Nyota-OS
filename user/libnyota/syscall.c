@@ -589,3 +589,15 @@ int inet_pton(int af, const char *src, void *dst) {
     return 0;
 }
 
+int brk(void *addr) {
+    int64_t ret = syscall1(85, (uint64_t)addr);
+    if (ret < 0) return -1;
+    return 0;
+}
+
+void *sbrk(intptr_t increment) {
+    int64_t ret = syscall1(86, (uint64_t)increment);
+    if (ret < 0) return (void *)-1;
+    return (void *)ret;
+}
+

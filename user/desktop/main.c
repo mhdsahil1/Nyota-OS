@@ -137,7 +137,7 @@ static void render_wallpaper(void) {
     fill_rect(banner_x - 28, banner_y - 18, 296, 96, 0x22181825);
 
     draw_text(banner_x + 36, banner_y, "N Y O T A   O S", COLOR_ACCENT_PRIMARY, 0);
-    draw_text(banner_x + 12, banner_y + 24, "Version 1.4.0 - Desktop Environment", COLOR_TEXT_MUTED, 0);
+    draw_text(banner_x + 12, banner_y + 24, "Version 1.5.0 - Desktop Environment", COLOR_TEXT_MUTED, 0);
     draw_text(banner_x + 48, banner_y + 44, "x86_64 Long Mode SMP Kernel", COLOR_TEXT_DIM, 0);
 }
 

@@ -14,6 +14,7 @@
 #define USER_SPACE_BASE         0x0000008000000000ULL  /* 512 GB mark */
 #define USER_SPACE_END          0x0000008010000000ULL  /* 256 MB region */
 #define USER_CODE_BASE          0x0000008000000000ULL
+#define USER_HEAP_BASE          0x0000008002000000ULL  /* 32 MB heap mark */
 #define USER_STACK_TOP          0x000000800FF00000ULL  /* 64 KiB user stack near top */
 #define USER_STACK_SIZE         (64 * 1024ULL)
 
@@ -72,6 +73,8 @@ typedef struct process {
 
     uint64_t entry_point;
     uint64_t user_stack_top;
+    uint64_t heap_start;         /* Base of user heap */
+    uint64_t heap_end;           /* Current program break */
     uint64_t kernel_stack;       /* Allocated kernel stack base */
     uint64_t kernel_stack_top;   /* Top of kernel stack (TSS.RSP0) */
     uint64_t saved_rsp;          /* Saved stack pointer pointing to interrupt_frame_t */

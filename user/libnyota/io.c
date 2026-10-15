@@ -84,7 +84,7 @@ static void print_dec_padded(int64_t val, int min_width, char pad_char) {
     }
 }
 
-static void print_dec(int64_t val) {
+static void __attribute__((unused)) print_dec(int64_t val) {
     print_dec_padded(val, 0, ' ');
 }
 
@@ -104,6 +104,22 @@ static void print_hex(uint64_t val) {
         val >>= 4;
     }
 
+    for (int j = i - 1; j >= 0; j--) {
+        putchar(buf[j]);
+    }
+}
+
+static void print_octal(uint64_t val) {
+    if (val == 0) {
+        putchar('0');
+        return;
+    }
+    char buf[24];
+    int i = 0;
+    while (val > 0) {
+        buf[i++] = (char)('0' + (val & 0x07));
+        val >>= 3;
+    }
     for (int j = i - 1; j >= 0; j--) {
         putchar(buf[j]);
     }
@@ -167,6 +183,11 @@ int printf(const char *fmt, ...) {
                 case 'u': {
                     unsigned int val = va_arg(args, unsigned int);
                     print_dec_padded((int64_t)val, width, pad_char);
+                    break;
+                }
+                case 'o': {
+                    unsigned int val = va_arg(args, unsigned int);
+                    print_octal((uint64_t)val);
                     break;
                 }
                 case 'x':
@@ -300,6 +321,27 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                     }
                     break;
                 }
+                case 'o': {
+                    uint64_t val = va_arg(args, unsigned int);
+                    char buf[24];
+                    int bi = 0;
+                    if (val == 0) {
+                        buf[bi++] = '0';
+                    } else {
+                        while (val > 0) {
+                            buf[bi++] = (char)('0' + (val & 0x07));
+                            val >>= 3;
+                        }
+                    }
+                    while (width > bi) {
+                        EMIT_CHAR(pad_char);
+                        width--;
+                    }
+                    for (int j = bi - 1; j >= 0; j--) {
+                        EMIT_CHAR(buf[j]);
+                    }
+                    break;
+                }
                 case 'x':
                 case 'p': {
                     uint64_t val = va_arg(args, uint64_t);
@@ -355,3 +397,38 @@ int snprintf(char *str, size_t size, const char *fmt, ...) {
     va_end(args);
     return ret;
 }
+
+int dprintf(int fd, const char *fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (n > 0) {
+        write(fd, buf, (size_t)n);
+    }
+    return n;
+}
+
+int fprintf(int fd, const char *fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (n > 0) {
+        write(fd, buf, (size_t)n);
+    }
+    return n;
+}
+
+int access(const char *path, int mode) {
+    if (!path) return -1;
+    stat_t st;
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+    (void)mode;
+    return 0;
+}
+
