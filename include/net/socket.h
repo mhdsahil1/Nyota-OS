@@ -136,5 +136,6 @@ int       socket_get_max(void);
 void      socket_wait(socket_t *sock);
 void      socket_wake(socket_t *sock);
 void      socket_dispatch_raw(int protocol, uint32_t src_ip, const void *data, size_t len);
+int       socket_get_diagnostics(void *buf, size_t max_count);
 
 #endif /* NYOTA_NET_SOCKET_H */

@@ -320,6 +320,10 @@ typedef struct {
     uint32_t uid;
     char state[16];
     char name[32];
+    uint64_t cpu_time_ms;
+    uint64_t memory_bytes;
+    uint64_t context_switches;
+    uint32_t current_cpu;
 } proc_info_t;
 
 int getprocs(proc_info_t *buf, size_t max_count);
@@ -715,6 +719,119 @@ typedef struct {
 int64_t vmm_op(uint32_t op, void *a1, void *a2, void *a3);
 int     vmm_get_info(lib_vmm_info_t *info);
 int     vmm_run_vm(char *report_buf, size_t report_len);
+
+/* ── Phase 18: Observability & Developer Tools APIs ────────────────────────── */
+#define SYS_TRACE_OP          88
+#define SYS_MEM_DIAG          89
+#define SYS_PKT_MON           90
+#define SYS_PROF_OP           91
+
+#define TRACE_OP_ATTACH       1
+#define TRACE_OP_DETACH       2
+#define TRACE_OP_READ         3
+#define TRACE_OP_ENABLE_SELF  4
+#define TRACE_OP_CLEAR        5
+
+typedef struct {
+    uint32_t pid;
+    uint32_t syscall_num;
+    uint64_t args[6];
+    int64_t  ret_val;
+    uint64_t duration_us;
+    uint64_t timestamp;
+} trace_event_t;
+
+#define MEM_DIAG_SUMMARY      1
+#define MEM_DIAG_VERIFY       2
+
+typedef struct {
+    uint64_t pmm_total_frames;
+    uint64_t pmm_free_frames;
+    uint64_t pmm_used_frames;
+    uint64_t pmm_total_bytes;
+    uint64_t pmm_free_bytes;
+    uint64_t pmm_used_bytes;
+
+    uint64_t heap_start;
+    uint64_t heap_end;
+    uint64_t heap_total_bytes;
+    uint64_t heap_used_bytes;
+    uint64_t heap_free_bytes;
+    uint32_t total_blocks;
+    uint32_t alloc_blocks;
+    uint32_t free_blocks;
+    uint32_t corrupted_blocks;
+    uint64_t largest_free_chunk;
+} mem_diag_info_t;
+
+#define PKTMON_OP_START       1
+#define PKTMON_OP_STOP        2
+#define PKTMON_OP_READ        3
+#define PKTMON_OP_STATS       4
+
+typedef struct {
+    uint64_t timestamp;
+    char     ifname[16];
+    uint8_t  direction;
+    uint16_t eth_proto;
+    uint32_t packet_len;
+    uint8_t  ip_proto;
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t  tcp_flags;
+} pkt_record_t;
+
+typedef struct {
+    char     ifname[16];
+    uint64_t rx_packets;
+    uint64_t rx_bytes;
+    uint64_t tx_packets;
+    uint64_t tx_bytes;
+    uint32_t is_up;
+    uint32_t mtu;
+} net_if_stat_t;
+
+typedef struct {
+    uint32_t sock_id;
+    int      domain;
+    int      type;
+    int      protocol;
+    int      state;
+    uint32_t local_ip;
+    uint16_t local_port;
+    uint32_t remote_ip;
+    uint16_t remote_port;
+} socket_diag_t;
+
+#define PROF_OP_START         1
+#define PROF_OP_STOP          2
+#define PROF_OP_GET_STATS     3
+#define PROF_OP_RESET         4
+
+typedef struct {
+    uint32_t syscall_num;
+    uint64_t call_count;
+    uint64_t total_cycles;
+    uint64_t min_cycles;
+    uint64_t max_cycles;
+    uint64_t avg_cycles;
+} syscall_prof_t;
+
+typedef struct {
+    uint32_t enabled;
+    uint64_t total_syscalls;
+    uint64_t start_time;
+    syscall_prof_t stats[128];
+} prof_report_t;
+
+int64_t trace_op(uint32_t op, uint32_t pid, void *arg);
+int64_t mem_diag(uint32_t op, void *buf);
+int64_t pkt_mon(uint32_t op, void *arg1, void *arg2);
+int64_t prof_op(uint32_t op, void *buf);
+const char *syscall_name_lookup(uint32_t num);
+
 
 /* String & Memory Functions */
 size_t strlen(const char *s);

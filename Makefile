@@ -166,7 +166,8 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/vmx.o              \
     $(BUILD_DIR)/svm.o              \
     $(BUILD_DIR)/ept.o              \
-    $(BUILD_DIR)/vmm_guest.o
+    $(BUILD_DIR)/vmm_guest.o        \
+    $(BUILD_DIR)/ksym.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -245,7 +246,12 @@ USER_BINARIES := \
     fs/root/bin/sectest     \
     fs/root/bin/devdemo     \
     fs/root/bin/nyotapkg    \
-    fs/root/bin/vmm
+    fs/root/bin/vmm         \
+    fs/root/bin/nytrace     \
+    fs/root/bin/pstree      \
+    fs/root/bin/memdiag     \
+    fs/root/bin/pktmon      \
+    fs/root/bin/nyprof
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4
@@ -689,6 +695,10 @@ $(BUILD_DIR)/ept.o: kernel/vmm/ept.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/vmm_guest.o: kernel/vmm/guest.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/vmm/guest.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ksym.o: kernel/debug/ksym.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/debug/ksym.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────

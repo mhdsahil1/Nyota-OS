@@ -95,6 +95,8 @@ int e1000_send(net_device_t *dev, const void *data, size_t len) {
         return -1;
     }
 
+    pktmon_record_packet("eth0", 1, data, len);
+
     e1000_tx_desc_t *desc = &tx_descs[tx_tail];
 
     /* Wait if previous descriptor is still pending transmission */

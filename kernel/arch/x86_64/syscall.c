@@ -1095,7 +1095,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.7.0", 5);
+    memcpy(info.kernel_ver, "1.8.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1890,6 +1890,285 @@ static int64_t sys_handle_vmm_op(uint32_t op, uint64_t a1, uint64_t a2, uint64_t
     }
 }
 
+/* ── System Call Tracing Subsystem (Phase 18) ──────────────────────────────── */
+
+#define TRACE_RING_MAX 256
+static trace_event_t trace_ring[TRACE_RING_MAX];
+static uint32_t trace_head = 0;
+static uint32_t trace_count = 0;
+static uint32_t trace_global_target_pid = 0;
+
+static inline uint64_t read_tsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void trace_record_event(uint32_t pid, uint32_t num,
+                               uint64_t a1, uint64_t a2, uint64_t a3,
+                               uint64_t a4, uint64_t a5, uint64_t a6,
+                               int64_t ret, uint64_t dur_us) {
+    uint32_t idx = trace_head % TRACE_RING_MAX;
+    trace_event_t *ev = &trace_ring[idx];
+    ev->pid = pid;
+    ev->syscall_num = num;
+    ev->args[0] = a1;
+    ev->args[1] = a2;
+    ev->args[2] = a3;
+    ev->args[3] = a4;
+    ev->args[4] = a5;
+    ev->args[5] = a6;
+    ev->ret_val = ret;
+    ev->duration_us = dur_us;
+    ev->timestamp = timer_ticks();
+
+    trace_head++;
+    if (trace_count < TRACE_RING_MAX) {
+        trace_count++;
+    }
+}
+
+static int64_t sys_handle_trace_op(uint32_t op, uint32_t target_pid, void *arg) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_ESRCH;
+
+    switch (op) {
+        case TRACE_OP_ATTACH: {
+            if (target_pid <= 1) {
+                /* Prohibit tracing init (PID 1) or kernel/idle */
+                return SYS_ERR_EPERM;
+            }
+            process_t *target = process_find(target_pid);
+            if (!target) return SYS_ERR_ESRCH;
+
+            /* Authorization: tracer must be root (EUID 0) or match target EUID */
+            if (curr->euid != 0 && curr->euid != target->euid) {
+                return SYS_ERR_EPERM;
+            }
+
+            target->is_traced = true;
+            target->tracer_pid = curr->pid;
+            trace_global_target_pid = target_pid;
+            return 0;
+        }
+
+        case TRACE_OP_DETACH: {
+            if (target_pid > 0) {
+                process_t *target = process_find(target_pid);
+                if (target) {
+                    if (curr->euid != 0 && curr->pid != target->tracer_pid) {
+                        return SYS_ERR_EPERM;
+                    }
+                    target->is_traced = false;
+                    target->tracer_pid = 0;
+                }
+            }
+            if (curr->tracer_pid == curr->pid) {
+                curr->tracer_pid = 0;
+            }
+            trace_global_target_pid = 0;
+            return 0;
+        }
+
+        case TRACE_OP_READ: {
+            if (!arg) return SYS_ERR_EINVAL;
+            size_t max_req = 32;
+            if (!user_validate_pointer(arg, max_req * sizeof(trace_event_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            trace_event_t kevents[32];
+            size_t avail = (trace_count < max_req) ? trace_count : max_req;
+            if (avail == 0) return 0;
+
+            uint32_t start_idx = (trace_head >= trace_count) ? (trace_head - trace_count) : 0;
+            for (size_t i = 0; i < avail; i++) {
+                uint32_t idx = (start_idx + i) % TRACE_RING_MAX;
+                memcpy(&kevents[i], &trace_ring[idx], sizeof(trace_event_t));
+            }
+            trace_count -= (uint32_t)avail;
+
+            if (copy_to_user(arg, kevents, avail * sizeof(trace_event_t)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return (int64_t)avail;
+        }
+
+        case TRACE_OP_ENABLE_SELF: {
+            curr->is_traced = false;
+            curr->tracer_pid = curr->pid;
+            return 0;
+        }
+
+        case TRACE_OP_CLEAR: {
+            trace_count = 0;
+            trace_head = 0;
+            return 0;
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
+/* ── Memory Diagnostics Subsystem (Phase 18) ───────────────────────────────── */
+
+static int64_t sys_handle_mem_diag(uint32_t op, void *buf) {
+    if (!buf) return SYS_ERR_EINVAL;
+
+    switch (op) {
+        case MEM_DIAG_SUMMARY: {
+            if (!user_validate_pointer(buf, sizeof(mem_diag_info_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+            mem_diag_info_t kdiag;
+            memset(&kdiag, 0, sizeof(mem_diag_info_t));
+            if (heap_get_diagnostics(&kdiag) < 0) {
+                return SYS_ERR_EIO;
+            }
+            if (copy_to_user(buf, &kdiag, sizeof(mem_diag_info_t)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return 0;
+        }
+
+        case MEM_DIAG_VERIFY: {
+            uint32_t total = 0, alloc = 0, free_cnt = 0, corrupted = 0;
+            uint64_t largest_free = 0;
+            heap_verify_integrity(&total, &alloc, &free_cnt, &corrupted, &largest_free);
+            if (user_validate_pointer(buf, sizeof(uint32_t) * 4, true)) {
+                uint32_t stats[4] = { total, alloc, free_cnt, corrupted };
+                copy_to_user(buf, stats, sizeof(stats));
+            }
+            return (int64_t)corrupted;
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
+/* ── Network Packet Monitoring Subsystem (Phase 18) ────────────────────────── */
+
+static int64_t sys_handle_pkt_mon(uint32_t op, void *arg1, void *arg2) {
+    process_t *curr = process_get_current();
+    if (!curr) return SYS_ERR_ESRCH;
+
+    switch (op) {
+        case PKTMON_OP_START:
+            /* Raw packet access restricted to root or CAP_NET_ADMIN */
+            if (curr->euid != 0 && !(curr->capabilities & CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            return pktmon_start();
+
+        case PKTMON_OP_STOP:
+            return pktmon_stop();
+
+        case PKTMON_OP_READ: {
+            /* Raw packet access restricted to root or CAP_NET_ADMIN */
+            if (curr->euid != 0 && !(curr->capabilities & CAP_NET_ADMIN)) {
+                return SYS_ERR_EPERM;
+            }
+            if (!arg1) return SYS_ERR_EINVAL;
+            size_t max_count = (size_t)arg2;
+            if (max_count == 0 || max_count > 64) max_count = 64;
+
+            if (!user_validate_pointer(arg1, max_count * sizeof(pkt_record_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+
+            pkt_record_t krecords[64];
+            int count = pktmon_read_records(krecords, max_count);
+            if (count > 0) {
+                if (copy_to_user(arg1, krecords, count * sizeof(pkt_record_t)) < 0) {
+                    return SYS_ERR_EFAULT;
+                }
+            }
+            return count;
+        }
+
+        case PKTMON_OP_STATS: {
+            if (arg1) {
+                net_if_stat_t if_stats[8];
+                int if_cnt = netdev_get_statistics(if_stats, 8);
+                if (if_cnt > 0) {
+                    if (!user_validate_pointer(arg1, if_cnt * sizeof(net_if_stat_t), true) ||
+                        copy_to_user(arg1, if_stats, if_cnt * sizeof(net_if_stat_t)) < 0) {
+                        return SYS_ERR_EFAULT;
+                    }
+                }
+            }
+            if (arg2) {
+                socket_diag_t sock_stats[32];
+                int s_cnt = socket_get_diagnostics(sock_stats, 32);
+                if (s_cnt > 0) {
+                    if (!user_validate_pointer(arg2, s_cnt * sizeof(socket_diag_t), true) ||
+                        copy_to_user(arg2, sock_stats, s_cnt * sizeof(socket_diag_t)) < 0) {
+                        return SYS_ERR_EFAULT;
+                    }
+                }
+            }
+            return 0;
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
+/* ── Performance Profiler Subsystem (Phase 18) ─────────────────────────────── */
+
+static prof_report_t prof_data;
+static bool prof_active = false;
+
+static void prof_record_syscall(uint32_t num, uint64_t cycles) {
+    if (num >= 128) return;
+    prof_data.total_syscalls++;
+    syscall_prof_t *sp = &prof_data.stats[num];
+    sp->syscall_num = num;
+    sp->call_count++;
+    sp->total_cycles += cycles;
+    if (sp->min_cycles == 0 || cycles < sp->min_cycles) sp->min_cycles = cycles;
+    if (cycles > sp->max_cycles) sp->max_cycles = cycles;
+    sp->avg_cycles = sp->total_cycles / sp->call_count;
+}
+
+static int64_t sys_handle_prof_op(uint32_t op, void *buf) {
+    switch (op) {
+        case PROF_OP_START:
+            memset(&prof_data, 0, sizeof(prof_report_t));
+            prof_data.enabled = 1;
+            prof_data.start_time = timer_ticks();
+            prof_active = true;
+            return 0;
+
+        case PROF_OP_STOP:
+            prof_active = false;
+            prof_data.enabled = 0;
+            return 0;
+
+        case PROF_OP_GET_STATS: {
+            if (!buf) return SYS_ERR_EINVAL;
+            if (!user_validate_pointer(buf, sizeof(prof_report_t), true)) {
+                return SYS_ERR_EFAULT;
+            }
+            prof_data.enabled = prof_active ? 1 : 0;
+            if (copy_to_user(buf, &prof_data, sizeof(prof_report_t)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return 0;
+        }
+
+        case PROF_OP_RESET:
+            memset(&prof_data, 0, sizeof(prof_report_t));
+            return 0;
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     process_t *curr = process_get_current();
     if (curr && curr->syscall_filter_enabled) {
@@ -1995,6 +2274,10 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_BRK:               return sys_handle_brk(a1);
         case SYS_SBRK:              return sys_handle_sbrk((int64_t)a1);
         case SYS_VMM_OP:            return sys_handle_vmm_op((uint32_t)a1, a2, a3, a4);
+        case SYS_TRACE_OP:          return sys_handle_trace_op((uint32_t)a1, (uint32_t)a2, (void *)a3);
+        case SYS_MEM_DIAG:          return sys_handle_mem_diag((uint32_t)a1, (void *)a2);
+        case SYS_PKT_MON:           return sys_handle_pkt_mon((uint32_t)a1, (void *)a2, (void *)a3);
+        case SYS_PROF_OP:           return sys_handle_prof_op((uint32_t)a1, (void *)a2);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2005,6 +2288,18 @@ void syscall_handler(interrupt_frame_t *frame) {
     cpu_t *c = cpu_current();
     if (c) c->syscall_count++;
 
+    process_t *curr = process_get_current();
+    bool trace_this = false;
+    if (curr && (curr->is_traced || (curr->pid > 0 && curr->pid == trace_global_target_pid))) {
+        if (frame->rax != SYS_TRACE_OP && curr->tracer_pid != curr->pid) {
+            trace_this = true;
+        }
+    }
+    uint64_t t0 = 0;
+    if (trace_this || prof_active) {
+        t0 = read_tsc();
+    }
+
     int64_t ret = syscall_dispatch(
         frame->rax,
         frame->rdi,
@@ -2014,6 +2309,23 @@ void syscall_handler(interrupt_frame_t *frame) {
         frame->r8,
         frame->r9
     );
+
+    if (trace_this || prof_active) {
+        uint64_t t1 = read_tsc();
+        uint64_t duration_cycles = (t1 >= t0) ? (t1 - t0) : 0;
+        uint64_t duration_us = duration_cycles / 2500;
+        if (duration_us == 0) duration_us = 1;
+
+        if (trace_this && curr) {
+            trace_record_event(curr->pid, (uint32_t)frame->rax,
+                frame->rdi, frame->rsi, frame->rdx, frame->r10, frame->r8, frame->r9,
+                ret, duration_us);
+        }
+
+        if (prof_active) {
+            prof_record_syscall((uint32_t)frame->rax, duration_cycles);
+        }
+    }
 
     frame->rax = (uint64_t)ret;
 
@@ -2985,5 +3297,68 @@ int64_t sys_vmm_op(uint32_t op, void *arg1, void *arg2, void *arg3) {
     );
     return ret;
 }
+
+int64_t sys_trace_op(uint32_t op, uint32_t pid, void *arg) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $88, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)op), "r"((uint64_t)pid), "r"((uint64_t)arg)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_mem_diag(uint32_t op, void *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $89, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)op), "r"((uint64_t)buf)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_pkt_mon(uint32_t op, void *arg1, void *arg2) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov $90, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)op), "r"((uint64_t)arg1), "r"((uint64_t)arg2)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+int64_t sys_prof_op(uint32_t op, void *buf) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov $91, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)op), "r"((uint64_t)buf)
+        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
 
 

@@ -47,6 +47,8 @@ static const char * const exception_names[32] = {
     "Reserved Vector 31"
 };
 
+#include "debug/ksym.h"
+
 void panic_with_frame(const char *title, const interrupt_frame_t *frame) {
     __asm__ volatile ("cli");
 
@@ -56,64 +58,148 @@ void panic_with_frame(const char *title, const interrupt_frame_t *frame) {
     vga_println("          NYOTA KERNEL PANIC            ");
     vga_println("========================================");
 
+    serial_write("\n========================================\n");
+    serial_write("          NYOTA KERNEL PANIC            \n");
+    serial_write("========================================\n");
+
     if (title) {
         vga_print("Condition : ");
         vga_println(title);
+        serial_write("Condition : ");
+        serial_write(title);
+        serial_write("\n");
+    }
+
+    process_t *curr = process_get_current();
+    if (curr) {
+        vga_print("Process   : [PID ");
+        vga_print_dec(curr->pid);
+        vga_print("] ");
+        vga_print(curr->name);
+        vga_print(" (EUID: ");
+        vga_print_dec(curr->euid);
+        vga_println(")");
+
+        serial_write("Process   : [PID ");
+        serial_write_dec(curr->pid);
+        serial_write("] ");
+        serial_write(curr->name);
+        serial_write(" (EUID: ");
+        serial_write_dec(curr->euid);
+        serial_write(")\n");
     }
 
     if (frame) {
         const char *name = (frame->vector < 32) ? exception_names[frame->vector] : "Hardware/Software Interrupt";
         vga_print("Exception : ");
         vga_println(name);
+        serial_write("Exception : ");
+        serial_write(name);
+        serial_write("\n");
 
         vga_print("Vector    : ");
         vga_print_dec(frame->vector);
         vga_println("");
+        serial_write("Vector    : ");
+        serial_write_dec(frame->vector);
+        serial_write("\n");
 
-        vga_print("Error Code: ");
+        vga_print("Error Code: 0x");
         vga_print_hex(frame->error_code);
         vga_println("");
+        serial_write("Error Code: 0x");
+        serial_write_hex(frame->error_code);
+        serial_write("\n");
 
         if (frame->vector == 14) {
             uint64_t cr2;
             __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
-            vga_print("CR2 (Addr): ");
+            vga_print("CR2 (Addr): 0x");
             vga_print_hex(cr2);
             vga_println("");
+            serial_write("CR2 (Addr): 0x");
+            serial_write_hex(cr2);
+            serial_write("\n");
         }
 
-        vga_print("RIP       : ");
+        uint64_t offset = 0;
+        const char *sym_name = ksym_lookup(frame->rip, &offset);
+        vga_print("RIP       : 0x");
         vga_print_hex(frame->rip);
-        vga_print("  CS: ");
+        vga_print(" <");
+        vga_print(sym_name ? sym_name : "??");
+        if (offset > 0) {
+            vga_print("+0x");
+            vga_print_hex(offset);
+        }
+        vga_print("> CS: 0x");
         vga_print_hex(frame->cs);
         vga_println("");
 
-        vga_print("RFLAGS    : ");
+        serial_write("RIP       : 0x");
+        serial_write_hex(frame->rip);
+        serial_write(" <");
+        serial_write(sym_name ? sym_name : "??");
+        if (offset > 0) {
+            serial_write("+0x");
+            serial_write_hex(offset);
+        }
+        serial_write("> CS: 0x");
+        serial_write_hex(frame->cs);
+        serial_write("\n");
+
+        vga_print("RFLAGS    : 0x");
         vga_print_hex(frame->rflags);
         vga_println("");
+        serial_write("RFLAGS    : 0x");
+        serial_write_hex(frame->rflags);
+        serial_write("\n");
 
-        vga_print("RSP       : ");
+        vga_print("RSP       : 0x");
         vga_print_hex(frame->rsp);
-        vga_print("  SS: ");
+        vga_print(" SS: 0x");
         vga_print_hex(frame->ss);
         vga_println("");
+        serial_write("RSP       : 0x");
+        serial_write_hex(frame->rsp);
+        serial_write(" SS: 0x");
+        serial_write_hex(frame->ss);
+        serial_write("\n");
 
         vga_println("----------------------------------------");
-        vga_print("RAX: "); vga_print_hex(frame->rax);
-        vga_print(" RBX: "); vga_print_hex(frame->rbx);
+        serial_write("----------------------------------------\n");
+        vga_print("RAX: 0x"); vga_print_hex(frame->rax);
+        vga_print(" RBX: 0x"); vga_print_hex(frame->rbx);
         vga_println("");
-        vga_print("RCX: "); vga_print_hex(frame->rcx);
-        vga_print(" RDX: "); vga_print_hex(frame->rdx);
+        vga_print("RCX: 0x"); vga_print_hex(frame->rcx);
+        vga_print(" RDX: 0x"); vga_print_hex(frame->rdx);
         vga_println("");
-        vga_print("RSI: "); vga_print_hex(frame->rsi);
-        vga_print(" RDI: "); vga_print_hex(frame->rdi);
+        vga_print("RSI: 0x"); vga_print_hex(frame->rsi);
+        vga_print(" RDI: 0x"); vga_print_hex(frame->rdi);
         vga_println("");
-        vga_print("RBP: "); vga_print_hex(frame->rbp);
+        vga_print("RBP: 0x"); vga_print_hex(frame->rbp);
         vga_println("");
+
+        serial_write("RAX: 0x"); serial_write_hex(frame->rax);
+        serial_write(" RBX: 0x"); serial_write_hex(frame->rbx);
+        serial_write("\nRCX: 0x"); serial_write_hex(frame->rcx);
+        serial_write(" RDX: 0x"); serial_write_hex(frame->rdx);
+        serial_write("\nRSI: 0x"); serial_write_hex(frame->rsi);
+        serial_write(" RDI: 0x"); serial_write_hex(frame->rdi);
+        serial_write("\nRBP: 0x"); serial_write_hex(frame->rbp);
+        serial_write("\n");
+
+        /* Stack Frame Unwinding */
+        stack_trace_dump(frame->rbp, frame->rip);
+
+        /* Stack Top QWORDs */
+        stack_top_dump(frame->rsp, 8);
     }
 
     vga_println("========================================");
     vga_println("System halted.");
+    serial_write("========================================\n");
+    serial_write("System halted.\n");
 
     while (1) {
         __asm__ volatile ("hlt");

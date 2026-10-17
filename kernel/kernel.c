@@ -89,20 +89,60 @@ void kerror(const char *str) {
 
 /* ── Kernel Panic System ───────────────────────────────────────────────────── */
 
+#include "debug/ksym.h"
+
 void kernel_panic(const char *reason) {
     __asm__ volatile ("cli");
+
+    uint64_t rbp = 0, rsp = 0;
+    __asm__ volatile ("mov %%rbp, %0; mov %%rsp, %1" : "=r"(rbp), "=r"(rsp));
 
     vga_set_color(VGA_WHITE, VGA_RED);
     vga_println("");
     vga_println("========================================");
     vga_println("          NYOTA KERNEL PANIC            ");
     vga_println("========================================");
+
+    serial_write("\n========================================\n");
+    serial_write("          NYOTA KERNEL PANIC            \n");
+    serial_write("========================================\n");
+
     vga_println("");
-    vga_println("Reason:");
+    vga_print("Reason    : ");
     vga_println(reason ? reason : "Unspecified kernel panic condition.");
-    vga_println("");
-    vga_println("System halted.");
+
+    serial_write("Reason    : ");
+    serial_write(reason ? reason : "Unspecified kernel panic condition.");
+    serial_write("\n");
+
+    process_t *curr = process_get_current();
+    if (curr) {
+        vga_print("Process   : [PID ");
+        vga_print_dec(curr->pid);
+        vga_print("] ");
+        vga_print(curr->name);
+        vga_print(" (EUID: ");
+        vga_print_dec(curr->euid);
+        vga_println(")");
+
+        serial_write("Process   : [PID ");
+        serial_write_dec(curr->pid);
+        serial_write("] ");
+        serial_write(curr->name);
+        serial_write(" (EUID: ");
+        serial_write_dec(curr->euid);
+        serial_write(")\n");
+    }
+
+    /* Stack Frame Unwinding */
+    stack_trace_dump(rbp, (uint64_t)&kernel_panic);
+    stack_top_dump(rsp, 8);
+
     vga_println("========================================");
+    vga_println("System halted.");
+
+    serial_write("========================================\n");
+    serial_write("System halted.\n");
 
     while (1) {
         __asm__ volatile ("hlt");
@@ -117,6 +157,9 @@ void kernel_main(void) {
 
     /* 2. Initialize VGA 80x25 text terminal */
     vga_init();
+
+    /* 2.1 Initialize Kernel Symbol Table */
+    ksym_init();
 
     /* 3. Display OS Boot Banner */
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);

@@ -10,6 +10,7 @@
 #include "kernel.h"
 #include "vga.h"
 #include "spinlock.h"
+#include "syscall.h"
 
 static spinlock_t heap_lock = SPINLOCK_INIT;
 static uint64_t heap_start_addr = KERNEL_HEAP_START;
@@ -323,3 +324,94 @@ void heap_print_stats(void) {
     vga_print_dec(heap_get_free() / 1024);
     vga_println(" KB");
 }
+
+int heap_verify_integrity(uint32_t *total, uint32_t *alloc, uint32_t *free_cnt, uint32_t *corrupted, uint64_t *largest_free) {
+    uint32_t t_cnt = 0, a_cnt = 0, f_cnt = 0, c_cnt = 0;
+    uint64_t max_free = 0;
+
+    uint64_t rflags = spinlock_acquire_irqsave(&heap_lock);
+    heap_block_t *curr = heap_head;
+    heap_block_t *prev = NULL;
+
+    while (curr) {
+        t_cnt++;
+        uint64_t p = (uint64_t)curr;
+
+        /* Check alignment and address bounds */
+        if ((p & (HEAP_ALIGNMENT - 1)) != 0 || p < heap_start_addr || p >= heap_end_addr) {
+            c_cnt++;
+            break;
+        }
+
+        /* Check magic numbers */
+        if (curr->is_free) {
+            if (curr->magic != HEAP_FREE_MAGIC) {
+                c_cnt++;
+            }
+            f_cnt++;
+            if (curr->size > max_free) {
+                max_free = curr->size;
+            }
+        } else {
+            if (curr->magic != HEAP_ALLOC_MAGIC) {
+                c_cnt++;
+            }
+            a_cnt++;
+        }
+
+        /* Check prev pointer linkage */
+        if (curr->prev != prev) {
+            c_cnt++;
+        }
+
+        /* Check block bounds */
+        if (curr->size > (heap_end_addr - heap_start_addr)) {
+            c_cnt++;
+            break;
+        }
+
+        prev = curr;
+        curr = curr->next;
+    }
+
+    spinlock_release_irqrestore(&heap_lock, rflags);
+
+    if (total) *total = t_cnt;
+    if (alloc) *alloc = a_cnt;
+    if (free_cnt) *free_cnt = f_cnt;
+    if (corrupted) *corrupted = c_cnt;
+    if (largest_free) *largest_free = max_free;
+
+    return (c_cnt == 0) ? 0 : -1;
+}
+
+int heap_get_diagnostics(void *diag_buf) {
+    if (!diag_buf) return -1;
+    mem_diag_info_t *diag = (mem_diag_info_t *)diag_buf;
+
+    uint32_t total = 0, alloc = 0, free_cnt = 0, corrupted = 0;
+    uint64_t largest_free = 0;
+    heap_verify_integrity(&total, &alloc, &free_cnt, &corrupted, &largest_free);
+
+    diag->pmm_total_frames = pmm_total_pages();
+    diag->pmm_free_frames = pmm_free_pages_count();
+    diag->pmm_used_frames = (diag->pmm_total_frames > diag->pmm_free_frames) ?
+                            (diag->pmm_total_frames - diag->pmm_free_frames) : 0;
+    diag->pmm_total_bytes = pmm_total_memory();
+    diag->pmm_free_bytes = pmm_free_memory();
+    diag->pmm_used_bytes = pmm_used_memory();
+
+    diag->heap_start = heap_start_addr;
+    diag->heap_end = heap_end_addr;
+    diag->heap_total_bytes = heap_end_addr - heap_start_addr;
+    diag->heap_used_bytes = heap_get_used();
+    diag->heap_free_bytes = heap_get_free();
+    diag->total_blocks = total;
+    diag->alloc_blocks = alloc;
+    diag->free_blocks = free_cnt;
+    diag->corrupted_blocks = corrupted;
+    diag->largest_free_chunk = largest_free;
+
+    return 0;
+}
+

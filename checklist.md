@@ -237,3 +237,17 @@
 - [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.7.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`), and drivers to `v1.7.0`
 - [x] Automated Test Suite: `tools/test_phase17.py` validating system boot, `v1.7.0` metadata, `/bin/vmm` discovery, hardware capability discovery, VM lifecycle execution, guest memory isolation, and host kernel stability
 - [x] Documentation: Created `docs/virtualization.md` detailing Intel VT-x and AMD-V architecture, VMCB/VMCS layout, EPT/NPT, syscall API, and `/bin/vmm` usage
+
+## Phase 18: Developer Tools & Kernel Observability (v1.8.0)
+- [x] Kernel Debugging: Enhanced crash diagnostics and panic reporting with running process context (PID, name, EUID), register dumps, top-of-stack dumps, and dual-output mirroring to VGA console and serial COM1
+- [x] Symbol Resolution & Stack Unwinding: `kernel/debug/ksym.c` symbol table resolving instruction pointers to symbol names and offsets, with `RBP` stack frame walking up to 16 call levels
+- [x] GDB Remote Debugging Integration: `tools/gdbinit_nyota` configuration script automating symbol loading and breakpoint hooks for QEMU GDB stub
+- [x] System-Call Tracing (`/bin/nytrace`): Intercepts syscall operations, arguments, return codes, and microsecond latencies via `SYS_TRACE_OP` (88); enforces security boundaries (prohibits tracing PID 1; checks EUID/root; protects sensitive payload data)
+- [x] Process & Scheduler Monitoring (`/bin/pstree`): Visualizes hierarchical process trees with execution states, CPU assignments, memory usage, and context switch counts
+- [x] Memory Diagnostics (`/bin/memdiag`): Allocator integrity checking via `SYS_MEM_DIAG` (89), block header canary magic (`0xAA55AA55`) validation, chunk classification, and physical memory frame accounting
+- [x] Network Diagnostics & Packet Tap (`/bin/pktmon`): Network interface statistics (RX/TX packets and bytes), active TCP/UDP/UNIX socket diagnostics, and ring-buffer packet header tapping via `SYS_PKT_MON` (90) restricted to `CAP_NET_ADMIN` / EUID 0
+- [x] Performance Profiling (`/bin/nyprof`): Hardware TSC cycle measurement of syscall latencies and call frequencies via `SYS_PROF_OP` (91) with low-overhead sampling
+- [x] Automated Test Suite: `tools/test_phase18.py` validating system boot, `v1.8.0` metadata, binary presence, process tree visualizer, heap integrity verification, network interface statistics, syscall tracing, security boundary enforcement, and host kernel stability
+- [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.8.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`), and graphics driver to `v1.8.0`
+- [x] Documentation: Created `docs/observability.md` detailing debugging workflows, symbol table unwinding, GDB integration, tracing ABI, and userspace diagnostics tools
+

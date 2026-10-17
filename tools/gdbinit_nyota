@@ -1,0 +1,47 @@
+# =============================================================================
+# Nyota OS — GDB Debugging Helper Script
+# Connects to QEMU GDB stub and loads kernel symbols with debugging macros.
+# Usage:
+#   1. make run-debug (in terminal 1)
+#   2. gdb -x tools/gdbinit_nyota (in terminal 2)
+# =============================================================================
+
+set confirm off
+set pagination off
+set architecture i386:x86-64
+
+# Connect to QEMU GDB stub (port 1234)
+target remote localhost:1234
+
+# Load kernel symbol table with .text at 0x100000
+symbol-file build/kernel.elf
+
+# Set breakpoints on critical crash / panic handlers
+break panic_with_frame
+break kernel_panic
+break exception_handler
+
+# Define helper command to print CPU state
+define regdump
+    printf "RAX: 0x%016lx  RBX: 0x%016lx\n", $rax, $rbx
+    printf "RCX: 0x%016lx  RDX: 0x%016lx\n", $rcx, $rdx
+    printf "RSI: 0x%016lx  RDI: 0x%016lx\n", $rsi, $rdi
+    printf "RBP: 0x%016lx  RSP: 0x%016lx\n", $rbp, $rsp
+    printf "RIP: 0x%016lx  RFLAGS: 0x%016lx\n", $rip, $eflags
+end
+document regdump
+Dump primary x86_64 general-purpose registers and instruction pointer.
+end
+
+# Define helper command to unwind stack
+define stacktrace
+    printf "=== Nyota OS Backtrace ===\n"
+    bt
+end
+document stacktrace
+Display GDB stack backtrace for Nyota OS kernel.
+end
+
+echo \n[Nyota OS] GDB debugger connected to localhost:1234.\n
+echo [Nyota OS] Symbols loaded from build/kernel.elf.\n
+echo [Nyota OS] Ready. Type 'c' to continue execution.\n\n

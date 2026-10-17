@@ -616,4 +616,42 @@ int vmm_run_vm(char *report_buf, size_t report_len) {
     return (int)ret;
 }
 
+int64_t trace_op(uint32_t op, uint32_t pid, void *arg) {
+    return syscall3(SYS_TRACE_OP, (uint64_t)op, (uint64_t)pid, (uint64_t)arg);
+}
+
+int64_t mem_diag(uint32_t op, void *buf) {
+    return syscall2(SYS_MEM_DIAG, (uint64_t)op, (uint64_t)buf);
+}
+
+int64_t pkt_mon(uint32_t op, void *arg1, void *arg2) {
+    return syscall3(SYS_PKT_MON, (uint64_t)op, (uint64_t)arg1, (uint64_t)arg2);
+}
+
+int64_t prof_op(uint32_t op, void *buf) {
+    return syscall2(SYS_PROF_OP, (uint64_t)op, (uint64_t)buf);
+}
+
+static const char * const syscall_names[] = {
+    "write", "exit", "getpid", "yield", "sleep", "open", "close", "read",
+    "seek", "stat", "getdents", "mkdir", "create", "exec", "spawn", "waitpid",
+    "socket", "bind", "listen", "accept", "connect", "send", "recv", "sendto",
+    "recvfrom", "shutdown", "pipe", "dup2", "kill", "signal", "getuid", "setuid",
+    "getgid", "setgid", "chmod", "chown", "shm_get", "shm_at", "shm_dt", "shm_ctl",
+    "getrandom", "spawn2", "secinfo", "getprocs", "time", "clock_gettime", "nanosleep", "chdir",
+    "getcwd", "sync", "reboot", "klog", "sysinfo", "tty_ctrl", "execve", "setpgid",
+    "getpgid", "setsid", "getsid", "unlink", "gfx_get_info", "gfx_flip", "input_get_event", "win_create",
+    "win_destroy", "win_update", "win_get_event", "win_server_op", "sched_setaffinity", "sched_getaffinity", "smp_info", "pci_info",
+    "blk_info", "blk_read", "blk_write", "blk_flush", "statvfs", "net_ctrl", "firewall_op", "geteuid",
+    "getegid", "seteuid", "setegid", "set_syscall_filter", "audit_log", "brk", "sbrk", "vmm_op",
+    "trace_op", "mem_diag", "pkt_mon", "prof_op"
+};
+
+const char *syscall_name_lookup(uint32_t num) {
+    if (num < sizeof(syscall_names) / sizeof(syscall_names[0])) {
+        return syscall_names[num];
+    }
+    return "unknown_syscall";
+}
+
 

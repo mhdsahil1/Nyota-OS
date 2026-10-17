@@ -385,6 +385,13 @@ process_t *process_create_from_elf_env(const char *path, char *const argv[], cha
     }
 
     proc->parent_pid = (curr && curr->pid > 0) ? curr->pid : 0;
+    if (curr && curr->tracer_pid == curr->pid) {
+        proc->is_traced = true;
+        proc->tracer_pid = curr->pid;
+    } else if (curr && curr->is_traced) {
+        proc->is_traced = true;
+        proc->tracer_pid = curr->tracer_pid;
+    }
     proc->state = PROCESS_NEW;
     proc->exit_status = 0;
     proc->cpu_affinity = (curr && curr->cpu_affinity) ? curr->cpu_affinity : 0xFFFFFFFFFFFFFFFFULL;
@@ -919,6 +926,10 @@ int process_get_table(proc_info_t *out, size_t max_count) {
             nidx++;
         }
         out[count].name[nidx] = '\0';
+        out[count].cpu_time_ms = p->runtime_ticks * 10;
+        out[count].memory_bytes = (p->heap_end > p->heap_start ? (p->heap_end - p->heap_start) : 0) + USER_STACK_SIZE + 0x10000;
+        out[count].context_switches = p->context_switches;
+        out[count].current_cpu = p->current_cpu;
         count++;
     }
     return (int)count;

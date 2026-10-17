@@ -157,4 +157,11 @@ int           netdev_set_down(net_device_t *dev);
 /* Entry point called by drivers when a raw Ethernet frame is received */
 int           netdev_receive(net_device_t *dev, const void *data, size_t len);
 
+/* Packet Monitor & Network Observability APIs (Phase 18) */
+void pktmon_record_packet(const char *ifname, uint8_t direction, const void *data, size_t len);
+int  pktmon_start(void);
+int  pktmon_stop(void);
+int  pktmon_read_records(void *buf, size_t max_count);
+int  netdev_get_statistics(void *buf, size_t max_count);
+
 #endif /* NYOTA_NET_NETDEV_H */

@@ -98,8 +98,115 @@
 #define SYS_BRK               85
 #define SYS_SBRK              86
 #define SYS_VMM_OP            87
+#define SYS_TRACE_OP          88
+#define SYS_MEM_DIAG          89
+#define SYS_PKT_MON           90
+#define SYS_PROF_OP           91
 
-/* SMP Information Data Structures */
+/* Trace Operations & Data Structures (Phase 18) */
+#define TRACE_OP_ATTACH       1
+#define TRACE_OP_DETACH       2
+#define TRACE_OP_READ         3
+#define TRACE_OP_ENABLE_SELF  4
+#define TRACE_OP_CLEAR        5
+
+typedef struct {
+    uint32_t pid;
+    uint32_t syscall_num;
+    uint64_t args[6];
+    int64_t  ret_val;
+    uint64_t duration_us;
+    uint64_t timestamp;
+} trace_event_t;
+
+/* Memory Diagnostics Operations & Data Structures (Phase 18) */
+#define MEM_DIAG_SUMMARY      1
+#define MEM_DIAG_VERIFY       2
+
+typedef struct {
+    uint64_t pmm_total_frames;
+    uint64_t pmm_free_frames;
+    uint64_t pmm_used_frames;
+    uint64_t pmm_total_bytes;
+    uint64_t pmm_free_bytes;
+    uint64_t pmm_used_bytes;
+
+    uint64_t heap_start;
+    uint64_t heap_end;
+    uint64_t heap_total_bytes;
+    uint64_t heap_used_bytes;
+    uint64_t heap_free_bytes;
+    uint32_t total_blocks;
+    uint32_t alloc_blocks;
+    uint32_t free_blocks;
+    uint32_t corrupted_blocks;
+    uint64_t largest_free_chunk;
+} mem_diag_info_t;
+
+/* Packet Monitoring Operations & Data Structures (Phase 18) */
+#define PKTMON_OP_START       1
+#define PKTMON_OP_STOP        2
+#define PKTMON_OP_READ        3
+#define PKTMON_OP_STATS       4
+
+typedef struct {
+    uint64_t timestamp;
+    char     ifname[16];
+    uint8_t  direction;    /* 0 = RX, 1 = TX */
+    uint16_t eth_proto;    /* 0x0800 IPv4, 0x86DD IPv6, 0x0806 ARP */
+    uint32_t packet_len;
+    uint8_t  ip_proto;     /* 6 TCP, 17 UDP, 1 ICMP */
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t  tcp_flags;
+} pkt_record_t;
+
+typedef struct {
+    char     ifname[16];
+    uint64_t rx_packets;
+    uint64_t rx_bytes;
+    uint64_t tx_packets;
+    uint64_t tx_bytes;
+    uint32_t is_up;
+    uint32_t mtu;
+} net_if_stat_t;
+
+typedef struct {
+    uint32_t sock_id;
+    int      domain;
+    int      type;
+    int      protocol;
+    int      state;
+    uint32_t local_ip;
+    uint16_t local_port;
+    uint32_t remote_ip;
+    uint16_t remote_port;
+} socket_diag_t;
+
+/* Performance Profiler Operations & Data Structures (Phase 18) */
+#define PROF_OP_START         1
+#define PROF_OP_STOP          2
+#define PROF_OP_GET_STATS     3
+#define PROF_OP_RESET         4
+
+typedef struct {
+    uint32_t syscall_num;
+    uint64_t call_count;
+    uint64_t total_cycles;
+    uint64_t min_cycles;
+    uint64_t max_cycles;
+    uint64_t avg_cycles;
+} syscall_prof_t;
+
+typedef struct {
+    uint32_t enabled;
+    uint64_t total_syscalls;
+    uint64_t start_time;
+    syscall_prof_t stats[128];
+} prof_report_t;
+
 typedef struct {
     uint32_t cpu_id;
     uint32_t apic_id;
@@ -280,5 +387,9 @@ int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count);
 int64_t sys_brk(uint64_t addr);
 void   *sys_sbrk(intptr_t increment);
 int64_t sys_vmm_op(uint32_t op, void *arg1, void *arg2, void *arg3);
+int64_t sys_trace_op(uint32_t op, uint32_t pid, void *arg);
+int64_t sys_mem_diag(uint32_t op, void *buf);
+int64_t sys_pkt_mon(uint32_t op, void *arg1, void *arg2);
+int64_t sys_prof_op(uint32_t op, void *buf);
 
 #endif /* NYOTA_SYSCALL_H */

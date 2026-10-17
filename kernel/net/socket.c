@@ -16,6 +16,7 @@
 #include "scheduler.h"
 #include "serial.h"
 #include "fs/vfs.h"
+#include "syscall.h"
 
 static socket_t socket_table[SOCKET_TABLE_MAX];
 static uint16_t ephemeral_port_counter = 49152;
@@ -661,3 +662,28 @@ int socket_close(socket_t *sock) {
 
     return 0;
 }
+
+int socket_get_diagnostics(void *buf, size_t max_count) {
+    if (!buf || max_count == 0) return 0;
+    socket_diag_t *out = (socket_diag_t *)buf;
+
+    size_t count = 0;
+    for (size_t i = 0; i < SOCKET_TABLE_MAX && count < max_count; i++) {
+        socket_t *s = &socket_table[i];
+        if (!s->in_use) continue;
+
+        out[count].sock_id = (uint32_t)s->id;
+        out[count].domain = s->domain;
+        out[count].type = s->type;
+        out[count].protocol = s->protocol;
+        out[count].state = s->state;
+        out[count].local_ip = s->local_ip;
+        out[count].local_port = s->local_port;
+        out[count].remote_ip = s->remote_ip;
+        out[count].remote_port = s->remote_port;
+        count++;
+    }
+
+    return (int)count;
+}
+

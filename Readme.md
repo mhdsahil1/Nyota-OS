@@ -13,7 +13,37 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.7.0** is a bootable x86_64 hobby operating system featuring a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem (Terminal, File Manager, Text Editor, Calculator, System Monitor, Task Manager, Settings, Network Manager), a native Developer Platform SDK (`libgui`, `libnyota`, `nyotacc` compiler driver, `nyotapkg` package manager, and example applications), a complete security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v1.8.0** is a bootable x86_64 hobby operating system featuring a native Developer Tools and Kernel Observability Toolkit (Kernel Symbol Table & Stack Unwinder `ksym`, GDB remote debugging scripts, System-Call Tracer `/bin/nytrace`, Process & Scheduler Hierarchy Visualizer `/bin/pstree`, Memory Allocator Diagnostics & Canary Verification `/bin/memdiag`, Network Interface & Socket Diagnostics `/bin/pktmon`, and Hardware Cycle Latency Profiler `/bin/nyprof`), a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem (Terminal, File Manager, Text Editor, Calculator, System Monitor, Task Manager, Settings, Network Manager), a native Developer Platform SDK (`libgui`, `libnyota`, `nyotacc` compiler driver, `nyotapkg` package manager, and example applications), a complete security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 18: Developer Tools & Kernel Observability
+
+Phase 18 implements a native debugging, diagnostics, tracing, and profiling toolkit for Nyota OS:
+- **Kernel Debugging & Diagnostics**:
+  - Enhanced crash reporting with faulting process context (PID, executable name, EUID).
+  - Kernel symbol table resolution (`kernel/debug/ksym.c`) resolving instruction pointers to function names and byte offsets.
+  - Call stack frame walking via `RBP` base pointer chains up to 16 call levels, with top-of-stack dumps.
+  - Real-time mirroring of all panic and backtrace diagnostics to the COM1 serial console.
+  - GDB remote debugging configuration and symbol automation script (`tools/gdbinit_nyota`).
+- **System-Call Tracing (`/bin/nytrace`)**:
+  - Intercepts system calls, arguments, return codes, and execution latencies in microseconds.
+  - Permission-enforced: restricted to root or matching EUID; tracing of PID 1 (`init`) or kernel idle tasks is strictly prohibited.
+  - Safe tracing buffers that omit raw sensitive payload contents to avoid exposing credentials.
+- **Process & Scheduler Monitoring (`/bin/pstree`)**:
+  - Visualizes parent-child process relationships in a clear hierarchical tree.
+  - Displays PID, process state (RUNNING, SLEEPING, READY, BLOCKED), CPU core assignment, memory consumption, and context switch counts.
+- **Memory Diagnostics (`/bin/memdiag`)**:
+  - Allocator integrity auditing verifying heap header magic canaries (`0xAA55AA55`), chunk linkage, and chunk boundaries.
+  - Physical memory accounting (total, used, free frames from PMM) and virtual heap fragmentation metrics.
+- **Network Diagnostics & Packet Monitoring (`/bin/pktmon`)**:
+  - Network interface packet and byte statistics for loopback (`lo`) and Ethernet (`eth0`).
+  - Active socket inspection table detailing socket ID, protocol (TCP, UDP, RAW), connection state, and local/remote endpoints.
+  - Kernel packet tap ring buffer capturing header metadata, gated by `CAP_NET_ADMIN` / EUID 0.
+- **Performance Profiling (`/bin/nyprof`)**:
+  - High-precision hardware Time Stamp Counter (`RDTSC`) cycle measurement of system call latencies.
+  - Summarizes invocation counts, average cycles, minimum, and maximum duration per syscall.
+- **Automated Verification & Documentation**:
+  - Automated test suite `tools/test_phase18.py` validating OS version `v1.8.0`, all five tools, process tree generation, heap integrity verification, socket telemetry, tracing latency, security enforcement, and host stability.
+  - Complete architectural documentation in `docs/observability.md`.
 
 ## Phase 17: Virtualization & Hypervisor
 

@@ -41,5 +41,7 @@ uint64_t heap_get_used(void);
 uint64_t heap_get_free(void);
 
 void heap_print_stats(void);
+int heap_verify_integrity(uint32_t *total, uint32_t *alloc, uint32_t *free_cnt, uint32_t *corrupted, uint64_t *largest_free);
+int heap_get_diagnostics(void *diag_buf);
 
 #endif /* NYOTA_HEAP_H */

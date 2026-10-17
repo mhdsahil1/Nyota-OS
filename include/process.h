@@ -56,6 +56,10 @@ typedef struct process {
     uint64_t syscall_filter_mask[2]; /* 128-bit filter mask */
     bool syscall_filter_locked;
 
+    /* System Call Tracing & Observability (Phase 18) */
+    bool is_traced;
+    uint32_t tracer_pid;
+
     /* Resource limits */
     uint64_t max_memory;
     uint32_t max_open_files;
@@ -134,6 +138,10 @@ typedef struct {
     uint32_t uid;
     char state[16];
     char name[32];
+    uint64_t cpu_time_ms;
+    uint64_t memory_bytes;
+    uint64_t context_switches;
+    uint32_t current_cpu;
 } proc_info_t;
 
 extern process_t *process_table[PROCESS_MAX_COUNT];
