@@ -130,7 +130,7 @@ def main():
     create_parser = subparsers.add_parser("create", help="Create an .npk package archive")
     create_parser.add_argument("output", help="Output .npk file path")
     create_parser.add_argument("--name", required=True, help="Package name")
-    create_parser.add_argument("--version", default="1.5.0", help="Package version")
+    create_parser.add_argument("--version", default="1.6.0", help="Package version")
     create_parser.add_argument("--desc", default="Nyota OS Native Package", help="Short description")
     create_parser.add_argument("--author", default="Nyota Developer", help="Author/Maintainer")
     create_parser.add_argument("--file", action="append", default=[], help="File mapping: target_path=host_path")

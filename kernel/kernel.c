@@ -48,6 +48,7 @@
 #include "drivers/window.h"
 #include "smp.h"
 #include "lapic.h"
+#include "vmm/vmm.h"
 
 /* ── Kernel Logging System ─────────────────────────────────────────────────── */
 
@@ -340,6 +341,24 @@ void kernel_main(void) {
         vga_println("Graphics");
         vga_println("");
     }
+
+    /* 17.8. Hardware-Assisted Virtualization & Hypervisor (Phase 17) */
+    vmm_init();
+    const vmm_capabilities_t *caps = vmm_get_capabilities();
+    if (caps && caps->status == VMM_STATUS_AVAILABLE) {
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_print("[ OK ] ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_print("Hypervisor (");
+        vga_print(caps->vendor_string);
+        vga_println(")");
+    } else {
+        vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+        vga_print("[INFO]  ");
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_println("Hypervisor (Disabled/Unsupported)");
+    }
+    vga_println("");
 
     /* 18. Launch First Userspace Process (/init) */
     klog_write(KLOG_LEVEL_INFO, "Launching PID 1 (/init)");

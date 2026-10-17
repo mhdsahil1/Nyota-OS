@@ -15,8 +15,7 @@
 #define NPK_MAX_FILES   128
 #define PKG_DB_DIR      "/var/lib/pkg/installed"
 
-#pragma pack(push, 1)
-typedef struct {
+typedef struct __attribute__((packed)) {
     char magic[4];                  /* "NPK1" */
     char name[NPK_NAME_MAX];        /* Package identifier */
     char version[NPK_VER_MAX];      /* Semantic version */
@@ -25,12 +24,11 @@ typedef struct {
     uint32_t file_count;            /* Number of archived files */
 } npk_header_t;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     char path[NPK_PATH_MAX];        /* Relative path e.g. "bin/foo" */
     uint32_t mode;                  /* File mode/permissions */
     uint32_t size;                  /* Payload size in bytes */
 } npk_file_header_t;
-#pragma pack(pop)
 
 /* ── Validation Helpers ───────────────────────────────────────────────────── */
 
@@ -400,7 +398,7 @@ static int cmd_remove(const char *pkg_name) {
 /* ── Usage / Main ─────────────────────────────────────────────────────────── */
 
 static void print_usage(void) {
-    printf("Nyota OS Package Manager (nyotapkg) v1.5.0\n");
+    printf("Nyota OS Package Manager (nyotapkg) v1.7.0\n");
     printf("Usage:\n");
     printf("  nyotapkg info <file.npk>     Inspect package metadata and contents\n");
     printf("  nyotapkg install <file.npk>  Validate and install native application\n");

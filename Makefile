@@ -48,6 +48,7 @@ CFLAGS := \
     -Wall                          \
     -Wextra                        \
     -Iinclude                      \
+    -Ikernel                       \
     -std=gnu99                     \
     -O2
 
@@ -160,7 +161,12 @@ KERNEL_C_OBJS := \
     $(BUILD_DIR)/window.o           \
     $(BUILD_DIR)/acpi.o             \
     $(BUILD_DIR)/lapic.o            \
-    $(BUILD_DIR)/smp.o
+    $(BUILD_DIR)/smp.o              \
+    $(BUILD_DIR)/vmm.o              \
+    $(BUILD_DIR)/vmx.o              \
+    $(BUILD_DIR)/svm.o              \
+    $(BUILD_DIR)/ept.o              \
+    $(BUILD_DIR)/vmm_guest.o
 
 ALL_KERNEL_OBJS := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
@@ -213,6 +219,9 @@ USER_BINARIES := \
     fs/root/bin/files       \
     fs/root/bin/editor      \
     fs/root/bin/sysmon      \
+    fs/root/bin/calc        \
+    fs/root/bin/taskmgr     \
+    fs/root/bin/netmgr      \
     fs/root/bin/settings    \
     fs/root/bin/about       \
     fs/root/bin/guisec      \
@@ -235,7 +244,8 @@ USER_BINARIES := \
     fs/root/bin/auditlog    \
     fs/root/bin/sectest     \
     fs/root/bin/devdemo     \
-    fs/root/bin/nyotapkg
+    fs/root/bin/nyotapkg    \
+    fs/root/bin/vmm
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4
@@ -256,7 +266,7 @@ all: $(IMAGE) $(DATA_IMAGE)
 	@echo.
 
 user: $(USER_BINARIES)
-sdk: user build/crt0.o $(LIBNYOTA)
+sdk: user build/crt0.o $(LIBNYOTA) $(LIBGUI)
 	@python tools/exportsdk.py
 fs: $(DATA_IMAGE)
 disk: $(DATA_IMAGE)
@@ -280,7 +290,7 @@ $(MKNYOTAFS): tools/mknyotafs.c | $(BUILD_DIR)
 
 # ── Build NyotaFS Persistent Disk Image ───────────────────────────────────────
 fs/root/pkg/devdemo.npk: fs/root/bin/devdemo tools/mkpkg.py
-	@python tools/mkpkg.py create $@ --name devdemo --version 1.5.0 --desc "Nyota Developer Platform Test Suite" --author "Nyota Developers" --file bin/devdemo=fs/root/bin/devdemo
+	@python tools/mkpkg.py create $@ --name devdemo --version 1.6.0 --desc "Nyota Developer Platform Test Suite" --author "Nyota Developers" --file bin/devdemo=fs/root/bin/devdemo
 
 $(DATA_IMAGE): $(MKNYOTAFS) $(USER_BINARIES) fs/root/pkg/devdemo.npk fs/root/etc/nyota.conf fs/root/home/welcome.txt | $(BUILD_DIR)
 	@echo [FS]    $(DATA_IMAGE)
@@ -659,6 +669,26 @@ $(BUILD_DIR)/lapic.o: kernel/arch/x86_64/lapic.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/smp.o: kernel/arch/x86_64/smp.c | $(BUILD_DIR)
 	@echo [BUILD] kernel/arch/x86_64/smp.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vmm.o: kernel/vmm/vmm.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/vmm/vmm.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vmx.o: kernel/vmm/vmx.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/vmm/vmx.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/svm.o: kernel/vmm/svm.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/vmm/svm.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ept.o: kernel/vmm/ept.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/vmm/ept.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vmm_guest.o: kernel/vmm/guest.c | $(BUILD_DIR)
+	@echo [BUILD] kernel/vmm/guest.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # ── Build Directory ───────────────────────────────────────────────────────────

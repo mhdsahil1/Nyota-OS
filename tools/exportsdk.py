@@ -20,9 +20,12 @@ def main():
 
     files_to_copy = [
         (os.path.join(ROOT_DIR, "user", "libnyota", "libnyota.h"), os.path.join(inc_dir, "libnyota.h")),
+        (os.path.join(ROOT_DIR, "user", "libgui", "gui.h"), os.path.join(inc_dir, "gui.h")),
+        (os.path.join(ROOT_DIR, "user", "libgui", "theme.h"), os.path.join(inc_dir, "theme.h")),
         (os.path.join(ROOT_DIR, "include", "types.h"), os.path.join(inc_dir, "types.h")),
         (os.path.join(BUILD_DIR, "crt0.o"), os.path.join(lib_dir, "crt0.o")),
         (os.path.join(BUILD_DIR, "libnyota.a"), os.path.join(lib_dir, "libnyota.a")),
+        (os.path.join(BUILD_DIR, "libgui.a"), os.path.join(lib_dir, "libgui.a")),
         (os.path.join(ROOT_DIR, "user.ld"), os.path.join(SDK_DIR, "user.ld")),
     ]
 

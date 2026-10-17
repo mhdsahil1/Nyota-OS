@@ -97,6 +97,7 @@
 #define SYS_AUDIT_LOG         84
 #define SYS_BRK               85
 #define SYS_SBRK              86
+#define SYS_VMM_OP            87
 
 /* SMP Information Data Structures */
 typedef struct {
@@ -278,5 +279,6 @@ int64_t sys_set_syscall_filter(uint8_t mode, uint64_t mask0, uint64_t mask1);
 int64_t sys_audit_log_op(uint32_t cmd, void *buf, size_t count);
 int64_t sys_brk(uint64_t addr);
 void   *sys_sbrk(intptr_t increment);
+int64_t sys_vmm_op(uint32_t op, void *arg1, void *arg2, void *arg3);
 
 #endif /* NYOTA_SYSCALL_H */

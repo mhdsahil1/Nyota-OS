@@ -601,3 +601,19 @@ void *sbrk(intptr_t increment) {
     return (void *)ret;
 }
 
+int64_t vmm_op(uint32_t op, void *a1, void *a2, void *a3) {
+    return syscall4(87, (uint64_t)op, (uint64_t)a1, (uint64_t)a2, (uint64_t)a3);
+}
+
+int vmm_get_info(lib_vmm_info_t *info) {
+    if (!info) return -1;
+    int64_t ret = vmm_op(VMM_OP_GET_INFO, info, 0, 0);
+    return (int)ret;
+}
+
+int vmm_run_vm(char *report_buf, size_t report_len) {
+    int64_t ret = vmm_op(VMM_OP_RUN_GUEST, report_buf, (void *)report_len, 0);
+    return (int)ret;
+}
+
+

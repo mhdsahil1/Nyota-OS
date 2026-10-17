@@ -194,11 +194,25 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            case 4: /* System */
-                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.5.0 (Developer Platform & C Runtime)", COLOR_TITLE_ACTIVE, 0);
+            case 4: { /* System */
+                gui_draw_text(win, content_x, content_y, "Nyota OS Release 1.7.0 (Virtualization & Hypervisor)", COLOR_TITLE_ACTIVE, 0);
                 content_y += 24;
                 gui_draw_text(win, content_x, content_y, "Kernel Architecture : x86_64 Long Mode", COLOR_TEXT_MUTED, 0);
                 content_y += 20;
+
+                lib_vmm_info_t vmm_inf;
+                memset(&vmm_inf, 0, sizeof(vmm_inf));
+                char vmm_line[96];
+                if (vmm_get_info(&vmm_inf) == 0 && vmm_inf.vendor != 0) {
+                    snprintf(vmm_line, sizeof(vmm_line), "Virtualization      : %s (Active, %s)",
+                             vmm_inf.vendor_name,
+                             vmm_inf.has_nested_paging ? "EPT/NPT Paging" : "Direct Paging");
+                } else {
+                    snprintf(vmm_line, sizeof(vmm_line), "Virtualization      : Hardware-Assisted Hypervisor (Ready)");
+                }
+                gui_draw_text(win, content_x, content_y, vmm_line, COLOR_ACCENT_PRIMARY, 0);
+                content_y += 20;
+
                 gui_draw_text(win, content_x, content_y, "Network Security    : Packet Firewall (nyfw)", COLOR_TEXT_MUTED, 0);
                 content_y += 20;
                 gui_draw_text(win, content_x, content_y, "Protocols Supported : IPv4, IPv6, ICMP/v6, TCP, UDP", COLOR_TEXT_MUTED, 0);
@@ -207,6 +221,7 @@ int main(int argc, char **argv) {
                 content_y += 20;
                 gui_draw_text(win, content_x, content_y, "Multitasking        : Preemptive SMP Round-Robin", COLOR_TEXT_MUTED, 0);
                 break;
+            }
         }
 
         gui_window_update(win);

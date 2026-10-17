@@ -13,7 +13,54 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.5.0** is a bootable x86_64 hobby operating system featuring a native Developer Platform (dynamic heap allocation via `malloc`/`free`, directory streaming via `opendir`/`readdir`, string & formatting libc utilities, `nyotacc` cross-compiler driver, standalone SDK, and `nyotapkg` package manager), a comprehensive security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v1.7.0** is a bootable x86_64 hobby operating system featuring a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem (Terminal, File Manager, Text Editor, Calculator, System Monitor, Task Manager, Settings, Network Manager), a native Developer Platform SDK (`libgui`, `libnyota`, `nyotacc` compiler driver, `nyotapkg` package manager, and example applications), a complete security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 17: Virtualization & Hypervisor
+
+Phase 17 implements a hardware-assisted hypervisor (VMM) subsystem for Nyota OS supporting both Intel VT-x and AMD-V:
+- **Architecture-Aware Hardware Support**:
+  - Runtime detection and capability interrogation for Intel VT-x (`CPUID.1:ECX[5]`, `IA32_FEATURE_CONTROL_MSR`, `IA32_VMX_BASIC_MSR`) and AMD-V (`CPUID.0x80000001:ECX[2]`, `MSR_VM_CR`, `EFER.SVME`).
+  - Safe initialization of VMXON regions, VMCS structures, AMD host-state save areas (`MSR_VM_HSAVE_PA`), and VMCB control blocks.
+- **Nested Memory Virtualization (EPT / NPT)**:
+  - Extended Page Tables (EPT) for Intel and Nested Page Tables (NPT) for AMD.
+  - Complete 4-level guest physical memory mapping translating Guest Physical Addresses (GPA) to Host Physical Addresses (HPA) while isolating guest memory from the host kernel.
+- **Virtual CPU & Minimal Guest Execution Loop**:
+  - Virtual CPU register state save/restore areas.
+  - Minimal 64-bit flat guest micro-payload (`kernel/vmm/guest.c`) testing CPUID interception, isolated memory writes to GPA `0x1000` (`0xCAFEBABE`), and clean termination via `HLT`.
+  - Architecture-specific VM-exit interception handlers for CPUID, HLT, hypercalls, and nested page faults.
+- **System Call ABI & Userspace Utilities**:
+  - System call `SYS_VMM_OP` (87) with `copy_to_user` safety checks for operational info, guest execution, and statistics.
+  - Native userspace hypervisor control utility `/bin/vmm` (`info`, `run`, `stats`, `test`, `help`).
+  - Desktop Settings integration with live hypervisor status and hardware capability display.
+- **Automated Verification**:
+  - Automated test suite `tools/test_phase17.py` validating system boot, `v1.7.0` metadata, `/bin/vmm` discovery, hardware capability discovery, VM lifecycle execution, guest memory isolation, and host kernel stability.
+- **Comprehensive Documentation**:
+  - Complete architectural guide in `docs/virtualization.md`.
+
+## Phase 16: Native Application Ecosystem
+
+Phase 16 delivers a complete native application ecosystem and GUI application development toolkit for Nyota OS:
+- **Core Native Applications**:
+  - **Terminal (`/bin/term`)**: Graphical terminal emulator with interactive shell execution and scrollback.
+  - **File Manager (`/bin/files`)**: Graphical file browser with directory tree navigation, file metadata inspection, and path tracking.
+  - **Text Editor (`/bin/editor`)**: Graphical text editor with file open/save, line-oriented cursor navigation, and status bar.
+  - **Calculator (`/bin/calc`)**: Native 64-bit fixed-point arithmetic calculator with interactive button grid, chained operators, decimals, sign inversion, clear/backspace, and keyboard bindings. Freestanding-compatible without hardware floating point dependencies.
+  - **System Monitor (`/bin/sysmon`)**: Real-time CPU, uptime, process count, and memory allocation visualizer.
+  - **Task Manager (`/bin/taskmgr`)**: Interactive process manager featuring dynamic process list selection, real-time memory usage bars, active process termination (`kill`), auto-refresh, and keyboard shortcuts.
+  - **Settings (`/bin/settings`)**: Multi-tabbed configuration panel for Display, Network interfaces, Storage devices, Firewall status, and System information.
+  - **Network Manager (`/bin/netmgr`)**: Interactive network management with tabs for Interface details (MAC, IP, MTU, Link status, packet statistics), Routing table, DNS servers, Firewall toggle with packet drop/accept statistics, and ICMP diagnostics.
+- **Native GUI Toolkit (`libgui`)**:
+  - Reusable windows (`gui_window_t`), 2D drawing primitives (rectangles, lines, text, pixels), double-buffered compositor interface, and event dispatch.
+  - Reusable widget hierarchy (`gui_widget_t`): Buttons, Labels, TextBoxes, Lists, Menus, Checkboxes, ProgressBars, ScrollBars, and Dialogs.
+  - Unified theme and design tokens (`theme.h`) using the Nyota dark-space palette.
+- **Application Management & Desktop Launcher**:
+  - Integrated desktop launcher menu with quick-launch shortcuts, window focus switching, minimize/maximize/close title bar controls, and graceful window server process cleanup.
+- **Nyota SDK (`sdk/`)**:
+  - Exported headers (`gui.h`, `theme.h`, `libnyota.h`, `types.h`), static libraries (`libgui.a`, `libnyota.a`, `crt0.o`), and linker script (`user.ld`).
+  - Standalone example applications (`sdk/examples/hello_cli.c`, `sdk/examples/hello_gui.c`, `sdk/examples/Makefile`).
+  - Comprehensive SDK documentation in `sdk/README.md`.
+- **Automated Verification**:
+  - Automated test suite `tools/test_phase16.py` verifying system boot, `v1.6.0` uname metadata, native applications presence, process spawning, process management, package manager integration, and SDK headers.
 
 ## Phase 15: Developer Platform
 

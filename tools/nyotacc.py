@@ -43,6 +43,10 @@ LIBNYOTA_PATH = os.path.join(SDK_DIR, "lib", "libnyota.a")
 if not os.path.isfile(LIBNYOTA_PATH):
     LIBNYOTA_PATH = os.path.join(BUILD_DIR, "libnyota.a")
 
+LIBGUI_PATH = os.path.join(SDK_DIR, "lib", "libgui.a")
+if not os.path.isfile(LIBGUI_PATH):
+    LIBGUI_PATH = os.path.join(BUILD_DIR, "libgui.a")
+
 USER_LD_PATH = os.path.join(SDK_DIR, "user.ld")
 if not os.path.isfile(USER_LD_PATH):
     USER_LD_PATH = os.path.join(ROOT_DIR, "user.ld")
@@ -65,7 +69,7 @@ DEFAULT_LDFLAGS = [
 ]
 
 def print_help():
-    print("Nyota OS Native C Compiler Driver (nyotacc) v1.5.0")
+    print("Nyota OS Native C Compiler Driver (nyotacc) v1.6.0")
     print("Usage: nyotacc [options] file...")
     print("Options:")
     print("  -o <file>      Place the executable into <file> (default: a.out)")
@@ -159,7 +163,12 @@ def main():
             print(f"nyotacc: error: user.ld linker script not found at '{USER_LD_PATH}'.", file=sys.stderr)
             sys.exit(1)
 
-        link_cmd = [LD] + DEFAULT_LDFLAGS + ["-T", USER_LD_PATH, "-o", intermediate_pe, CRT0_PATH] + all_objs + [LIBNYOTA_PATH]
+        libs = []
+        if os.path.isfile(LIBGUI_PATH):
+            libs.append(LIBGUI_PATH)
+        libs.append(LIBNYOTA_PATH)
+
+        link_cmd = [LD] + DEFAULT_LDFLAGS + ["-T", USER_LD_PATH, "-o", intermediate_pe, CRT0_PATH] + all_objs + libs
         if verbose:
             print("[LD]  " + " ".join(link_cmd))
         ret = subprocess.run(link_cmd)

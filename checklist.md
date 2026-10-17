@@ -212,4 +212,28 @@
 - [x] Automated Test Suite: `tools/test_phase15.py` validating system boot, `v1.5.0` uname, `devdemo` execution, and package manager operations
 - [x] Version Bump: system metadata, headers, drivers, and user applications updated to `v1.5.0`
 
+## Phase 16: Native Application Ecosystem (v1.6.0)
+- [x] Nyota SDK Enhancement: Added `gui.h` and `theme.h` to `sdk/include/`, exported `libgui.a` to `sdk/lib/`, updated `tools/exportsdk.py` and `tools/nyotacc.py`
+- [x] Standalone SDK Examples: Created `sdk/examples/hello_cli.c`, `sdk/examples/hello_gui.c`, and `sdk/examples/Makefile`
+- [x] SDK Documentation: Updated `sdk/README.md` with complete GUI Toolkit, widget hierarchy, design tokens, and compilation guides
+- [x] Native Calculator Application: `/bin/calc` with 64-bit fixed-point arithmetic engine, interactive button grid, decimal handling, sign toggle, clear, and keyboard input
+- [x] Native Task Manager Application: `/bin/taskmgr` with process selection, real-time memory usage bars, interactive kill capability, auto-refresh, and keyboard navigation
+- [x] Native Network Manager Application: `/bin/netmgr` with tabbed interface (Interfaces, Routing table, DNS config, Firewall toggle & stats, Diagnostics ping)
+- [x] Core Native Applications: Full suite in `/bin` — `/bin/term`, `/bin/files`, `/bin/editor`, `/bin/calc`, `/bin/sysmon`, `/bin/taskmgr`, `/bin/settings`, `/bin/netmgr`, `/bin/about`
+- [x] Desktop Launcher & Application Management: Integrated all applications into desktop menu launcher with shortcut badges, process spawning, and window server event dispatch
+- [x] Application Crash & Lifecycle Resilience: Isolated Ring 3 address spaces, safe window teardown on process exit, capability-checked process termination
+- [x] Automated Test Suite: `tools/test_phase16.py` verifying system boot, `v1.6.0` uname metadata, native application presence, background process spawning, process management, package manager integration, and SDK headers
+- [x] Version Bump: System metadata, kernel headers (`NYOTA_OS_VERSION "1.6.0"`), syscalls, init supervisor, drivers, desktop, and user applications updated to `v1.6.0`
 
+## Phase 17: Virtualization & Hypervisor (v1.7.0)
+- [x] Hardware Support & Vendor Detection: Architecture-aware hypervisor engine with runtime detection for Intel VT-x (`kernel/vmm/vmx.c`) and AMD-V SVM (`kernel/vmm/svm.c`)
+- [x] Intel VT-x Driver: VMX capability checking, `IA32_FEATURE_CONTROL_MSR` verification, 4 KiB aligned VMXON region, VMCS setup with full host/guest register state, and VM-exit handling loop
+- [x] AMD-V (SVM) Driver: `EFER.SVME` activation, 4 KiB host save area (`MSR_VM_HSAVE_PA`), VMCB control area with instruction interception (CPUID, HLT, VMRUN, VMMCALL), and `clgi`/`vmrun`/`stgi` loop
+- [x] Guest Memory Management & Isolation: Extended Page Tables (EPT) and Nested Page Tables (NPT) mapping guest physical addresses (GPA) to host physical addresses (HPA), with memory boundary isolation
+- [x] Virtual CPU & Guest Execution: Minimal 64-bit flat guest environment (`kernel/vmm/guest.c`) with PML4/PDPT/PD identity tables, verifying CPUID interception, isolated memory write to GPA `0x1000` (`0xCAFEBABE`), and clean HLT termination
+- [x] Hypervisor System Call: `SYS_VMM_OP` (87) supporting `VMM_OP_GET_INFO`, `VMM_OP_RUN_VM`, and `VMM_OP_GET_STATS`
+- [x] Userspace Hypervisor Utility: Native `/bin/vmm` application supporting `info`, `run`, `stats`, `test`, and `help` commands
+- [x] Desktop Settings Integration: System tab updated with live virtualization hardware capability detection and operational status
+- [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.7.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`), and drivers to `v1.7.0`
+- [x] Automated Test Suite: `tools/test_phase17.py` validating system boot, `v1.7.0` metadata, `/bin/vmm` discovery, hardware capability discovery, VM lifecycle execution, guest memory isolation, and host kernel stability
+- [x] Documentation: Created `docs/virtualization.md` detailing Intel VT-x and AMD-V architecture, VMCB/VMCS layout, EPT/NPT, syscall API, and `/bin/vmm` usage

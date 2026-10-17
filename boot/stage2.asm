@@ -419,10 +419,10 @@ setup_paging_tables:
     ; PDPT[0] at 0x2000 points to PD at 0x3000 (Flags: Present=1, Writable=1)
     mov  dword [0x2000], 0x3003
 
-    ; PD at 0x3000 identity maps 0 - 128 MB using 64 2MB huge pages (Flag: 0x83)
+    ; PD at 0x3000 identity maps 0 - 1024 MB (1GB) using 512 2MB huge pages (Flag: 0x83)
     mov  edi, 0x3000
     mov  eax, 0x00000083        ; Base 0, Present=1, Writable=1, Page Size=2MB (Bit 7=1)
-    mov  ecx, 64                ; 64 * 2MB = 128 MB (entries 64..511 remain zero/not present)
+    mov  ecx, 512               ; 512 * 2MB = 1024 MB (1GB complete lower gigabyte)
 .map_pd:
     mov  dword [edi], eax
     mov  dword [edi + 4], 0

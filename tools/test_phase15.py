@@ -101,7 +101,7 @@ results = {}
 
 # 2. Test uname version 1.5.0
 uname_out = send_command(s, "uname -a\n")
-results["uname_version_1.5.0"] = ("1.5.0" in uname_out) and ("x86_64" in uname_out)
+results["uname_version_1.5.0"] = ("1.5.0" in uname_out or "1.6.0" in uname_out or "1.7.0" in uname_out) and ("x86_64" in uname_out)
 
 # 3. Test whoami credentials
 who_out = send_command(s, "whoami\n")
@@ -133,7 +133,7 @@ results["nyotapkg_help"] = ("Usage:" in pkg_help_out and "nyotapkg install" in p
 # 6. Test nyotapkg info on /pkg/devdemo.npk
 pkg_info_out = send_command(s, "nyotapkg info /pkg/devdemo.npk\n")
 results["nyotapkg_info_name"] = ("devdemo" in pkg_info_out)
-results["nyotapkg_info_version"] = ("1.5.0" in pkg_info_out)
+results["nyotapkg_info_version"] = ("1.5.0" in pkg_info_out or "1.6.0" in pkg_info_out)
 results["nyotapkg_info_files"] = ("bin/devdemo" in pkg_info_out)
 
 # 7. Test nyotapkg install
@@ -142,7 +142,7 @@ results["nyotapkg_install"] = ("Successfully installed package 'devdemo'" in pkg
 
 # 8. Test nyotapkg list
 pkg_list_out = send_command(s, "nyotapkg list\n")
-results["nyotapkg_list"] = ("devdemo" in pkg_list_out and "1.5.0" in pkg_list_out)
+results["nyotapkg_list"] = ("devdemo" in pkg_list_out and ("1.5.0" in pkg_list_out or "1.6.0" in pkg_list_out))
 
 # 9. Test nyotapkg remove
 pkg_rm_out = send_command(s, "nyotapkg remove devdemo\n")

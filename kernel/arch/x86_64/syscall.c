@@ -43,6 +43,7 @@
 #include "storage/partition.h"
 #include "storage/ahci.h"
 #include "storage/nvme.h"
+#include "vmm/vmm.h"
 
 void ___chkstk_ms(void) {}
 
@@ -1094,7 +1095,7 @@ static int64_t sys_handle_sysinfo(uint64_t info_uptr) {
     info.used_ram = pmm_used_memory();
     info.free_ram = pmm_free_memory();
     info.process_count = (uint32_t)process_count();
-    memcpy(info.kernel_ver, "1.5.0", 5);
+    memcpy(info.kernel_ver, "1.7.0", 5);
     memcpy(info.machine, "x86_64", 6);
 
     if (copy_to_user((void *)info_uptr, &info, sizeof(info)) < 0) {
@@ -1833,6 +1834,62 @@ static int64_t sys_handle_sbrk(int64_t inc) {
     return (int64_t)old_brk;
 }
 
+static int64_t sys_handle_vmm_op(uint32_t op, uint64_t a1, uint64_t a2, uint64_t a3) {
+    (void)a3;
+    switch (op) {
+        case VMM_OP_GET_INFO: {
+            if (!a1) return SYS_ERR_EFAULT;
+
+            const vmm_capabilities_t *caps = vmm_get_capabilities();
+            const vmm_stats_t *stats = vmm_get_stats();
+
+            vmm_info_t info;
+            memset(&info, 0, sizeof(info));
+            if (caps) {
+                info.vendor = (uint32_t)caps->vendor;
+                info.status = (uint32_t)caps->status;
+                info.has_nested_paging = caps->has_nested_paging ? 1 : 0;
+                info.revision_id = caps->revision_id;
+                strncpy(info.vendor_name, caps->vendor_string, sizeof(info.vendor_name) - 1);
+                strncpy(info.status_msg, caps->status_message, sizeof(info.status_msg) - 1);
+            }
+            if (stats) {
+                info.total_entries   = stats->vm_entries_total;
+                info.total_exits     = stats->vm_exits_total;
+                info.exits_cpuid     = stats->exits_cpuid;
+                info.exits_hlt       = stats->exits_hlt;
+                info.exits_hypercall = stats->exits_hypercall;
+                info.exits_ept_fault = stats->exits_page_fault;
+            }
+
+            if (copy_to_user((void *)a1, &info, sizeof(vmm_info_t)) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return 0;
+        }
+
+        case VMM_OP_RUN_GUEST: {
+            char *user_buf = (char *)a1;
+            size_t buf_len = (size_t)a2;
+            if (!user_buf || buf_len < 128) return SYS_ERR_EINVAL;
+
+            char kern_buf[1024];
+            memset(kern_buf, 0, sizeof(kern_buf));
+            int res = vmm_run_diagnostics(kern_buf, sizeof(kern_buf));
+
+            size_t to_copy = strlen(kern_buf) + 1;
+            if (to_copy > buf_len) to_copy = buf_len;
+            if (copy_to_user(user_buf, kern_buf, to_copy) < 0) {
+                return SYS_ERR_EFAULT;
+            }
+            return (res == 0) ? 0 : SYS_ERR_EIO;
+        }
+
+        default:
+            return SYS_ERR_EINVAL;
+    }
+}
+
 int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     process_t *curr = process_get_current();
     if (curr && curr->syscall_filter_enabled) {
@@ -1937,6 +1994,7 @@ int64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, ui
         case SYS_AUDIT_LOG:         return kernel_audit_log_op((uint32_t)a1, (void *)a2, (size_t)a3);
         case SYS_BRK:               return sys_handle_brk(a1);
         case SYS_SBRK:              return sys_handle_sbrk((int64_t)a1);
+        case SYS_VMM_OP:            return sys_handle_vmm_op((uint32_t)a1, a2, a3, a4);
         default:            return SYS_ERR_ENOSYS;
     }
 }
@@ -2910,4 +2968,22 @@ void *sys_sbrk(intptr_t increment) {
     if (ret < 0) return (void *)-1;
     return (void *)ret;
 }
+
+int64_t sys_vmm_op(uint32_t op, void *arg1, void *arg2, void *arg3) {
+    int64_t ret;
+    __asm__ volatile (
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "mov %4, %%r10\n"
+        "mov $87, %%rax\n"
+        "int $0x80\n"
+        "mov %%rax, %0\n"
+        : "=r"(ret)
+        : "r"((uint64_t)op), "r"((uint64_t)arg1), "r"((uint64_t)arg2), "r"((uint64_t)arg3)
+        : "rax", "rdi", "rsi", "rdx", "r10", "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
 

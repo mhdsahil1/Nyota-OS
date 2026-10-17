@@ -628,7 +628,7 @@ int main(int argc, char **argv) {
     printf("========================================\n");
     printf("              NYOTA OS                  \n");
     printf("========================================\n");
-    printf("Kernel       : v1.5.0\n");
+    printf("Kernel       : v1.7.0\n");
     printf("Architecture : x86_64\n\n");
     printf("[INIT] Starting userspace supervisor\n\n");
 
@@ -640,8 +640,11 @@ int main(int argc, char **argv) {
         struct sockaddr_un sun;
         sun.sun_family = AF_UNIX;
         strcpy(sun.sun_path, "/run/init.sock");
-        bind(init_sock_fd, (struct sockaddr *)&sun, sizeof(sun));
-        listen(init_sock_fd, 5);
+        if (bind(init_sock_fd, (struct sockaddr *)&sun, sizeof(sun)) == 0) {
+            if (listen(init_sock_fd, 5) < 0) {
+                /* listen error */
+            }
+        }
     }
 
     /* Start services sequentially in dependency order */

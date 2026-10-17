@@ -691,6 +691,31 @@ void *realloc(void *ptr, size_t size);
 int   brk(void *addr);
 void *sbrk(intptr_t increment);
 
+/* Hardware Virtualization & Hypervisor (Phase 17) */
+typedef struct {
+    uint32_t vendor;               /* 1 = Intel VMX, 2 = AMD SVM, 0 = None */
+    uint32_t status;               /* Operational status */
+    uint32_t has_nested_paging;    /* 1 if EPT/NPT supported */
+    uint32_t revision_id;
+    uint64_t total_entries;
+    uint64_t total_exits;
+    uint64_t exits_cpuid;
+    uint64_t exits_hlt;
+    uint64_t exits_hypercall;
+    uint64_t exits_ept_fault;
+    char     vendor_name[16];
+    char     status_msg[64];
+} lib_vmm_info_t;
+
+#define VMM_OP_GET_INFO     1
+#define VMM_OP_RUN_GUEST    2
+#define VMM_OP_GET_STATS    3
+#define VMM_OP_RESET_STATS  4
+
+int64_t vmm_op(uint32_t op, void *a1, void *a2, void *a3);
+int     vmm_get_info(lib_vmm_info_t *info);
+int     vmm_run_vm(char *report_buf, size_t report_len);
+
 /* String & Memory Functions */
 size_t strlen(const char *s);
 int strcmp(const char *s1, const char *s2);

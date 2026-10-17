@@ -1,7 +1,7 @@
 /* =============================================================================
  * Nyota OS — Developer Platform Native Sample Application (/bin/devdemo)
  * Tests libc runtime, memory management, string utilities, directory streaming,
- * and system APIs for native C applications on Nyota OS v1.5.0.
+ * and system APIs for native C applications on Nyota OS v1.6.0.
  * =========================================================================== */
 
 #include "libnyota.h"
@@ -185,8 +185,8 @@ static void test_string_and_ctype(void) {
 static void test_formatted_io(void) {
     printf("[6/8] Testing snprintf and formatted I/O...\n");
     char buf[128];
-    int n = snprintf(buf, sizeof(buf), "OS: %s v%d.%d.%d [0x%x]", "Nyota", 1, 5, 0, 0x15);
-    int match = (strcmp(buf, "OS: Nyota v1.5.0 [0x15]") == 0 && n > 0);
+    int n = snprintf(buf, sizeof(buf), "OS: %s v%d.%d.%d [0x%x]", "Nyota", 1, 6, 0, 0x16);
+    int match = (strcmp(buf, "OS: Nyota v1.6.0 [0x16]") == 0 && n > 0);
     assert_test("snprintf string and hex formatting", match);
 }
 
@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
     (void)argv;
 
     printf("\n===================================================\n");
-    printf(" Nyota OS v1.5.0 — Developer Platform Test Suite\n");
+    printf(" Nyota OS v1.6.0 — Developer Platform Test Suite\n");
     printf(" Native C Application Verification (/bin/devdemo)\n");
     printf("===================================================\n\n");
 
