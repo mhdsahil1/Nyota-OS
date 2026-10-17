@@ -1,5 +1,5 @@
 /* =============================================================================
- * Nyota OS — Hardware-Assisted Virtual Machine Monitor (VMM)
+ * Nyota OS — Hardware-Assisted Virtual Machine Monitor (VMM Subsystem)
  * Central hypervisor manager orchestrating Intel VT-x, AMD-V, EPT, and guests.
  * =========================================================================== */
 

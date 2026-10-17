@@ -4,8 +4,6 @@
  * =========================================================================== */
 
 #include "vmm/svm.h"
-#include "vmm/ept.h"
-#include "vmm/guest.h"
 #include "pmm.h"
 #include "memory.h"
 #include "kernel.h"
