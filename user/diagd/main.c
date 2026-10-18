@@ -69,8 +69,7 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    printf("[diagd] Starting Nyota OS diagnostics daemon (PID %d)\n", getpid());
-    log_diag_event("Diagnostics daemon initialized successfully");
+    log_diag_event("Starting Nyota OS diagnostics daemon");
 
     /* Create PID file */
     int pfd = open(DIAG_PID_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);

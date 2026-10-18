@@ -97,29 +97,31 @@ int block_cache_read(block_device_t *bdev, uint64_t lba, uint32_t count, void *b
         spinlock_release_irqrestore(&cache_lock, rflags);
         return BLOCK_OK;
     }
-
-    /* Cache Miss: Read from device into newly allocated block */
-    cache_block_t *slot = get_victim_block();
-    slot->bdev = bdev;
-    slot->lba = lba;
-    slot->flags = 0;
-    slot->last_accessed = cache_timer;
-
-    /* Perform read while lock is released to avoid holding lock during hardware I/O */
     spinlock_release_irqrestore(&cache_lock, rflags);
 
-    int err = block_device_read(bdev, lba, sectors_per_block, slot->data);
+    /* Cache Miss: Read from device directly into target buffer without holding or racing cache slots */
+    int err = block_device_read(bdev, lba, sectors_per_block, buffer);
+    if (err != 0) {
+        return err;
+    }
 
+    /* Atomically update the cache slot with verified read data */
     rflags = spinlock_acquire_irqsave(&cache_lock);
-    if (err == 0) {
-        slot->flags |= CACHE_FLAG_VALID;
-        memcpy(buffer, slot->data, BLOCK_CACHE_BLOCK_SIZE);
+    cache_timer++;
+    cache_block_t *existing = find_block(bdev, lba);
+    if (!existing) {
+        cache_block_t *slot = get_victim_block();
+        slot->bdev = bdev;
+        slot->lba = lba;
+        memcpy(slot->data, buffer, BLOCK_CACHE_BLOCK_SIZE);
+        slot->flags = CACHE_FLAG_VALID;
+        slot->last_accessed = cache_timer;
     } else {
-        slot->flags = 0; /* Invalidate slot on I/O error */
+        existing->last_accessed = cache_timer;
     }
     spinlock_release_irqrestore(&cache_lock, rflags);
 
-    return err;
+    return BLOCK_OK;
 }
 
 int block_cache_write(block_device_t *bdev, uint64_t lba, uint32_t count, const void *buffer) {

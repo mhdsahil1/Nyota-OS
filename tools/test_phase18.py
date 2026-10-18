@@ -114,7 +114,7 @@ def run_tests():
     print("\n--- Test 1: System Version Metadata (v1.8.0) ---")
     uname_out = send_command(s, "uname -a\n")
     print(f"uname output: {uname_out.strip()}")
-    results["uname_version_1.8.0"] = ("1.8.0" in uname_out or "1.9.0" in uname_out) and ("x86_64" in uname_out)
+    results["uname_version_1.8.0"] = ("1.8.0" in uname_out or "1.9.0" in uname_out or "2.0.0" in uname_out) and ("x86_64" in uname_out)
 
     # 2. Test presence of new observability binaries in /bin
     print("\n--- Test 2: Presence of Observability Binaries in /bin ---")

@@ -358,7 +358,7 @@ static inline void diag_analyze_telemetry(const diag_telemetry_t *t, const ai_di
     /* 1. Compile Observed Facts */
     snprintf(res->facts[res->fact_count++], DIAG_LINE_MAX,
              "Kernel: %s (%s) | Uptime: %lu sec | Processes: %d active (%d zombie)",
-             t->kernel_ver[0] ? t->kernel_ver : "1.9.0", t->machine[0] ? t->machine : "x86_64",
+             t->kernel_ver[0] ? t->kernel_ver : "2.0.0", t->machine[0] ? t->machine : "x86_64",
              t->uptime_sec, t->process_count, t->zombie_count);
 
     uint64_t used_mb = t->used_ram_bytes / (1024 * 1024);
@@ -639,7 +639,7 @@ static inline int format_diagnostic_report(const diag_telemetry_t *t,
         "Redaction Filter: %s\n"
         "======================================================================\n\n"
         "[FACTS]\n",
-        t->kernel_ver[0] ? t->kernel_ver : "1.9.0", t->machine[0] ? t->machine : "x86_64",
+        t->kernel_ver[0] ? t->kernel_ver : "2.0.0", t->machine[0] ? t->machine : "x86_64",
         h_str, t->uptime_sec,
         cfg->provider == AI_PROVIDER_HTTP ? "HTTP External LLM" : (cfg->provider == AI_PROVIDER_MOCK ? "Mock Provider" : "Local Heuristic Engine"),
         cfg->endpoint,

@@ -19,7 +19,7 @@ static void run_cli_summary(const diag_telemetry_t *t, const diag_analysis_resul
     printf("   NYOTA OS SYSTEM HEALTH SUMMARY       \n");
     printf("========================================\n");
     printf("Overall Status : [%s]\n", h_color);
-    printf("OS Version     : Nyota OS %s (%s)\n", t->kernel_ver[0] ? t->kernel_ver : "1.9.0", t->machine[0] ? t->machine : "x86_64");
+    printf("OS Version     : Nyota OS %s (%s)\n", t->kernel_ver[0] ? t->kernel_ver : "2.0.0", t->machine[0] ? t->machine : "x86_64");
     printf("Uptime         : %lu seconds\n", t->uptime_sec);
     printf("Memory Usage   : %lu MB / %lu MB (%u%%)\n",
            t->used_ram_bytes / (1024 * 1024),
@@ -129,7 +129,7 @@ static void run_gui_diagnostics(void) {
         gui_fill_rect(win, 12, 10, GUI_WIDTH - 24, 52, COLOR_WIDGET_BG);
         gui_draw_rect(win, 12, 10, GUI_WIDTH - 24, 52, COLOR_WIDGET_BORDER);
 
-        gui_draw_text(win, 24, 18, "Nyota OS AI-Assisted System Diagnostics (v1.9.0)", COLOR_TITLE_ACTIVE, 0);
+        gui_draw_text(win, 24, 18, "Nyota OS AI-Assisted System Diagnostics (v2.0.0)", COLOR_TITLE_ACTIVE, 0);
 
         uint32_t badge_col = (res.health == HEALTH_STATUS_OK) ? COLOR_SUCCESS :
                              ((res.health == HEALTH_STATUS_WARNING) ? COLOR_WARNING : COLOR_DANGER);
@@ -139,7 +139,7 @@ static void run_gui_diagnostics(void) {
 
         char subhdr[128];
         snprintf(subhdr, sizeof(subhdr), "Kernel: %s | Uptime: %lu sec | Provider: %s",
-                 telem.kernel_ver[0] ? telem.kernel_ver : "1.9.0", telem.uptime_sec,
+                 telem.kernel_ver[0] ? telem.kernel_ver : "2.0.0", telem.uptime_sec,
                  cfg.provider == AI_PROVIDER_HTTP ? "HTTP LLM" : "Local Heuristic");
         gui_draw_text(win, 24, 38, subhdr, COLOR_TEXT_MUTED, 0);
 

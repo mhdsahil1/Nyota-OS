@@ -13,7 +13,49 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.9.0** is a bootable x86_64 hobby operating system featuring an optional AI-Assisted System Diagnostics framework (`/sbin/diagd`, `/bin/nydiag` CLI & GUI, secret redaction, consent gating, structured fact/hypothesis/recommendation reports), a native Developer Tools and Kernel Observability Toolkit (Kernel Symbol Table & Stack Unwinder `ksym`, GDB remote debugging scripts, System-Call Tracer `/bin/nytrace`, Process & Scheduler Hierarchy Visualizer `/bin/pstree`, Memory Allocator Diagnostics & Canary Verification `/bin/memdiag`, Network Interface & Socket Diagnostics `/bin/pktmon`, and Hardware Cycle Latency Profiler `/bin/nyprof`), a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem, a native Developer Platform SDK, a complete security architecture, advanced networking, modern storage architecture, PCI hardware enumeration, true Symmetric Multiprocessing (SMP), a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v2.0.0** is a bootable, stable, fully integrated release of an x86_64 hobby operating system featuring true Symmetric Multiprocessing (SMP), a protected Ring 3 graphical desktop environment, a modular Unix-style service supervisor, a complete security architecture ($W \oplus X$, capabilities, process isolation), a POSIX-inspired native standard library (`libnyota`) and SDK, modern storage drivers (ATA PIO, AHCI SATA, NVMe), an advanced network stack (IPv4, IPv6, TCP, UDP, firewall, HTTP), hardware-assisted virtualization (Intel VT-x / AMD-V), an observability toolkit (`nytrace`, `nyprof`, `memdiag`, `pktmon`), an optional AI-assisted system diagnostics service (`diagd`, `nydiag`), and reproducible builds.
+
+## Phase 20: Nyota OS 2.0 — Stability, Integration & Final Release
+
+Phase 20 represents the culminating integration and stabilization milestone for Nyota OS, delivering a stable, fully verified, bootable release:
+- **Full System Audit & Concurrency Stabilization**:
+  - Addressed multi-process concurrency hazards in the kernel storage block cache (`kernel/storage/cache.c`). During concurrent executable loading (e.g. `ls | cat` pipeline), hardware sectors are read directly to caller memory on cache misses, eliminating victim slot collisions that previously caused `elf_load: read_file ehdr failed`.
+  - Streamlined userspace daemon startup by decoupling `/sbin/diagd` initialization from the console stdout stream, guaranteeing deterministic prompt display on serial and VGA terminals.
+- **Master Release Acceptance Test Suite (`tools/test_phase20.py`)**:
+  - Automated 14-point acceptance suite verifying boot reliability, OS version metadata, security architecture, service supervision, NyotaFS read/write persistence, pipeline concurrency, IPC subsystem, process crash isolation, networking, heap canaries, observability tools, AI diagnostics, native desktop applications, and multi-core SMP (`-smp 2`).
+  - **Results**: 14/14 tests passing (100%).
+- **Comprehensive Regression Verification**:
+  - `tools/test_security.py`: 25/25 tests passing (100%) across user/kernel isolation, capabilities, guard pages, pointer validation, pipelines, and crash handling.
+  - `tools/test_phase19.py`: 14/14 tests passing (100%) for telemetry collection, AI provider fallback, secret redaction, and consent gating.
+  - `tools/test_phase18.py`: 11/11 tests passing (100%) for kernel observability, tracing, and latency profiling.
+  - `tools/test_smp.py`: Multi-core scheduler and work-stealing verified under 1, 2, and 4 CPU topologies.
+- **Reproducible Bootable Release Images**:
+  - `build/nyota.img`: 1.44 MB floppy image containing the two-stage bootloader and stripped 64-bit ELF kernel.
+  - `build/nyota-data.img`: 16 MB NyotaFS storage image pre-populated with 100 native executables, configuration files, and system assets.
+- **QEMU Launch Commands**:
+  - **Standard Graphical Desktop Mode**:
+    ```bash
+    qemu-system-x86_64 -m 512M -smp 2 -drive format=raw,file=build/nyota.img,index=0,media=disk -drive format=raw,file=build/nyota-data.img,index=1,media=disk -vga std -serial stdio
+    ```
+  - **Headless / CI Automation Mode**:
+    ```bash
+    qemu-system-x86_64 -m 512M -smp 2 -drive format=raw,file=build/nyota.img,index=0,media=disk -drive format=raw,file=build/nyota-data.img,index=1,media=disk -display none -serial tcp:127.0.0.1:4444,server,wait
+    ```
+- **Feature Matrix & Compatibility Status**:
+  | Subsystem | Implemented & Verified | Experimental | Unsupported |
+  |---|---|---|---|
+  | **CPU & SMP** | ACPI MADT, APIC, SMP (1–4 cores), Work Stealing | 8+ cores (TCG emulation slow) | Hotplug CPU |
+  | **Memory** | 4-Level Paging, PMM, Kernel Heap Canaries, $W \oplus X$ | User Heap Growth (`brk`/`sbrk`) | Demand Paging, Swap to Disk |
+  | **Storage** | ATA PIO (LBA28/48), AHCI SATA, NVMe, MBR/GPT, NyotaFS | Block Cache LRU (64 KiB) | USB Mass Storage, SCSI |
+  | **Networking**| Intel e1000, ARP, IPv4, IPv6 SLAAC, TCP, UDP, DHCP, Firewall | HTTP/1.1 client & server | Wi-Fi, VirtIO net |
+  | **Security** | Ring 3 Isolation, Capabilities, Guard Pages, Audit Log | Syscall Filtering Sandbox | Dynamic ASLR randomization |
+  | **GUI & Apps**| 1024x768x32 Window Server, Desktop, Term, Editor, Calc, Sysmon | Double-buffered Compositor | Hardware 3D Acceleration (DRM) |
+  | **Observability**| `nytrace`, `pstree`, `memdiag`, `pktmon`, `nyprof`, GDB stub | Core Dumps | Dynamic Kernel Probes (kprobes) |
+  | **Diagnostics**| Local Heuristic AI Engine, Telemetry Daemon, Redaction | Remote HTTP LLM Provider | Autonomous Action Execution |
+- **Transparent Known Limitations**:
+  1. *Static Linking Only*: All user executables are statically linked 64-bit ELFs (`PF_X` verification). Dynamic linking (`.so` / `ld.so`) is intentionally unsupported.
+  2. *Single Active Disk Partition for Root*: NyotaFS mounts partition 1 on primary slave ATA disk (`/dev/ata1`). Multi-volume RAID and LVM are unsupported.
+  3. *Unprivileged User Space*: Default non-root user `sahil` (UID 1000) cannot read `/etc/shadow` or perform raw packet sniffing, maintaining strict POSIX-style security semantics.
 
 ## Phase 19: AI-Assisted System Diagnostics
 

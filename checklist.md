@@ -265,4 +265,17 @@
 - [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.9.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`, `settings`), and graphics driver to `v1.9.0`
 - [x] Documentation: Created `docs/diagnostics.md` detailing architecture, telemetry pipeline, modular AI providers, privacy redaction, GUI dashboard, and CLI command reference
 
+## Phase 20: Nyota OS 2.0 Stability, Integration & Final Release (v2.0.0)
+- [x] Full System Audit: Comprehensive audit of all subsystems across Phases 1–19, identifying and resolving concurrency bottlenecks
+- [x] Storage Cache Concurrency Fix: Resolved victim slot collision in `kernel/storage/cache.c` by reading hardware blocks directly to caller memory during cache misses, eliminating race conditions in concurrent pipelines (`ls | cat`)
+- [x] Clean Daemon Logging: Removed stdout greetings from `diagd` in `user/diagd/main.c` to prevent serial prompt interference during boot and login
+- [x] Unified Version Bump to `v2.0.0`: Updated version strings across `include/kernel.h`, `kernel/arch/x86_64/syscall.c`, `drivers/gfx.c`, `user/uname/main.c`, `user/init/main.c`, `user/desktop/main.c`, `user/about/main.c`, `user/settings/main.c`, `user/sysmon/main.c`, `user/term/main.c`, `user/nydiag/main.c`, and `user/diagd/diag_engine.h`
+- [x] Security Regression Suite: `tools/test_security.py` passes 25/25 tests (100%), including isolation, capabilities, guard pages, pointer validation, pipelines, and crash handling
+- [x] Observability Regression Suite: `tools/test_phase18.py` passes 11/11 tests (100%), verifying `nytrace`, `pstree`, `memdiag`, `pktmon`, and `nyprof`
+- [x] AI Diagnostics Regression Suite: `tools/test_phase19.py` passes 14/14 tests (100%), verifying telemetry, fact/hypothesis separation, secret redaction, and consent gating
+- [x] Master Acceptance Test Suite: `tools/test_phase20.py` passes 14/14 tests (100%), verifying full system boot, versioning, security, service supervisor, storage persistence, pipelines, IPC, crash isolation, networking, heap canaries, observability, AI diagnostics, GUI suite, and multi-core SMP (`-smp 2`)
+- [x] Bootable Release Images: Reproducible builds for `build/nyota.img` (1.44 MB floppy boot image) and `build/nyota-data.img` (16 MB NyotaFS filesystem populated with 100 binaries and configs)
+- [x] Documentation & Feature Matrix: Updated `Readme.md`, `decisions.md`, and `checklist.md` with release instructions, verified capabilities, and transparent known limitations
+
+
 
