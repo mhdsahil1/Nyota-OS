@@ -786,6 +786,8 @@ void process_exit(int status) {
     if (curr) {
         curr->state = PROCESS_ZOMBIE;
         curr->exit_status = status;
+        curr->is_traced = false;
+        curr->tracer_pid = 0;
 
         /* Close all open file descriptors */
         vfs_close_process_fds(curr->fds);

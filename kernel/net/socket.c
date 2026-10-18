@@ -370,11 +370,11 @@ int socket_connect(socket_t *sock, const struct sockaddr_in *addr) {
         uint64_t start_ms = timer_uptime_ms();
         while (sock->state == TCP_STATE_SYN_SENT) {
             e1000_poll_rx();
-            if (timer_uptime_ms() - start_ms > 4000) {
+            if (timer_uptime_ms() - start_ms > 500) {
                 sock->state = TCP_STATE_CLOSED;
                 return -1; /* Connection timeout */
             }
-            socket_wait(sock);
+            __asm__ volatile ("sti; hlt");
         }
 
         process_t *curr = process_get_current();

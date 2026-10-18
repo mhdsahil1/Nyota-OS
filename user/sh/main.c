@@ -357,10 +357,19 @@ static void tokenize(char *line, char **tokens, int max_tokens) {
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '\0') break;
 
-        tokens[num++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        if (*p) {
-            *p++ = '\0';
+        if (*p == '"' || *p == '\'') {
+            char quote = *p++;
+            tokens[num++] = p;
+            while (*p && *p != quote) p++;
+            if (*p) {
+                *p++ = '\0';
+            }
+        } else {
+            tokens[num++] = p;
+            while (*p && *p != ' ' && *p != '\t') p++;
+            if (*p) {
+                *p++ = '\0';
+            }
         }
     }
     tokens[num] = NULL;

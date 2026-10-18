@@ -104,11 +104,14 @@ int main(int argc, char *argv[]) {
     uint64_t total_us = 0;
 
     int n;
-    while ((n = (int)trace_op(TRACE_OP_READ, 0, events)) > 0) {
+    int max_batches = 32;
+    while (max_batches-- > 0 && (n = (int)trace_op(TRACE_OP_READ, 0, events)) > 0) {
         for (int i = 0; i < n; i++) {
-            print_syscall_event(&events[i]);
-            total_events++;
-            total_us += events[i].duration_us;
+            if (events[i].pid == (uint32_t)child_pid) {
+                print_syscall_event(&events[i]);
+                total_events++;
+                total_us += events[i].duration_us;
+            }
         }
     }
 

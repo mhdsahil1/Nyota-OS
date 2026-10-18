@@ -13,7 +13,31 @@
   and operating system fundamentals.
 </p>
 
-**Nyota OS v1.8.0** is a bootable x86_64 hobby operating system featuring a native Developer Tools and Kernel Observability Toolkit (Kernel Symbol Table & Stack Unwinder `ksym`, GDB remote debugging scripts, System-Call Tracer `/bin/nytrace`, Process & Scheduler Hierarchy Visualizer `/bin/pstree`, Memory Allocator Diagnostics & Canary Verification `/bin/memdiag`, Network Interface & Socket Diagnostics `/bin/pktmon`, and Hardware Cycle Latency Profiler `/bin/nyprof`), a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem (Terminal, File Manager, Text Editor, Calculator, System Monitor, Task Manager, Settings, Network Manager), a native Developer Platform SDK (`libgui`, `libnyota`, `nyotacc` compiler driver, `nyotapkg` package manager, and example applications), a complete security architecture and kernel hardening framework (hardware NX/W^X, user/group identities, VFS file permissions, capabilities, syscall filtering sandbox, SHA-256 shadow authentication, audit logging), advanced networking (DHCPv4, IPv6, TCP reliability, packet-filtering firewall, DNS, HTTP client & daemon), modern storage architecture (Unified Block Layer, AHCI SATA, NVMe, MBR & GPT partition discovery, LRU block caching), PCI hardware enumeration, true Symmetric Multiprocessing (SMP) and multicore execution, a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+**Nyota OS v1.9.0** is a bootable x86_64 hobby operating system featuring an optional AI-Assisted System Diagnostics framework (`/sbin/diagd`, `/bin/nydiag` CLI & GUI, secret redaction, consent gating, structured fact/hypothesis/recommendation reports), a native Developer Tools and Kernel Observability Toolkit (Kernel Symbol Table & Stack Unwinder `ksym`, GDB remote debugging scripts, System-Call Tracer `/bin/nytrace`, Process & Scheduler Hierarchy Visualizer `/bin/pstree`, Memory Allocator Diagnostics & Canary Verification `/bin/memdiag`, Network Interface & Socket Diagnostics `/bin/pktmon`, and Hardware Cycle Latency Profiler `/bin/nyprof`), a basic Hardware-Assisted Hypervisor and Virtualization Subsystem (Intel VT-x VMX, AMD-V SVM, Extended Page Tables EPT / Nested Page Tables NPT, Virtual CPU execution loop, guest memory isolation, and userspace `/bin/vmm`), a comprehensive Native Application Ecosystem, a native Developer Platform SDK, a complete security architecture, advanced networking, modern storage architecture, PCI hardware enumeration, true Symmetric Multiprocessing (SMP), a native user-space desktop, protected Ring 3 applications, and NyotaFS storage.
+
+## Phase 19: AI-Assisted System Diagnostics
+
+Phase 19 delivers an optional, privacy-centric AI-assisted diagnostics subsystem for analyzing system telemetry, explaining crashes, detecting resource pressure, and guiding administrators without compromising security boundaries:
+- **Diagnostic Telemetry Service (`/sbin/diagd`)**:
+  - Supervised daemon listening on `/run/diag.sock` and writing `/run/diagd.pid`.
+  - Continuous telemetry collection spanning physical memory (PMM), kernel heap allocator integrity and canaries, root filesystem free blocks, active scheduler process/zombie counts, network interface link/packet counters, and recent process crash exceptions.
+  - IPC API providing `PING`, `HEALTH`, `METRICS`, `ANALYZE`, and `REPORT` verbs.
+- **Diagnostic Tool & Desktop Assistant (`/bin/nydiag`)**:
+  - Dual-mode utility supporting both full-featured command-line subcommands and an interactive graphical desktop dashboard (`/bin/nydiag --gui`).
+  - Subcommands: `health`, `summary`, `analyze [--local|--ai]`, `crash`, `redact`, `config`, and `report [-o <file>]`.
+  - Desktop GUI presents color-coded health badges, metric summary cards (RAM, Disk, Network), observed facts list, root-cause hypotheses, and advisory troubleshooting actions.
+- **Modular AI Provider Architecture**:
+  - **Local Heuristic Engine**: Built-in deterministic reasoning engine requiring zero network connectivity, functioning 100% offline.
+  - **External HTTP LLM Provider**: REST integration for Ollama/OpenAI-compatible endpoints (`/api/generate`) with strict connection timeouts and automatic local fallback.
+  - **Mock Provider**: Simulated failure injection engine (`--mock memory|crash|network`) for reproducible CI/CD testing.
+  - Configurable via `/etc/diagnostics.conf`.
+- **Privacy & Security Safeguards**:
+  - **Zero External Telemetry Without Consent**: External transmission is strictly blocked unless explicit user consent is supplied (`--consent`, `-y`).
+  - **Credential & Secret Redaction**: Automatic scrubbing of Bearer tokens, API keys, passwords, and secrets before output or network transmission.
+  - **Factual Separation & Non-Execution Principle**: Telemetry reports strictly partition observed ground truth (`[FACTS]`) from probabilistic reasoning (`[HYPOTHESIS]`) and recommendations (`[RECOMMENDATIONS]`). Suggested commands are never automatically executed.
+- **Automated Verification & Documentation**:
+  - Automated test suite `tools/test_phase19.py` validating OS version metadata, binary availability, health checks, metrics summaries, local heuristic reasoning, factual separation, secret redaction, consent enforcement, simulated crash diagnostics, offline fallback, report file export, configuration queries, and host kernel stability.
+  - Full architectural documentation in `docs/diagnostics.md`.
 
 ## Phase 18: Developer Tools & Kernel Observability
 

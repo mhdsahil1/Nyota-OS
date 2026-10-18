@@ -183,6 +183,7 @@ USER_BINARIES := \
     fs/root/sbin/ttyd       \
     fs/root/sbin/netd       \
     fs/root/sbin/logind     \
+    fs/root/sbin/diagd      \
     fs/root/bin/sh          \
     fs/root/bin/service     \
     fs/root/bin/logger      \
@@ -251,7 +252,8 @@ USER_BINARIES := \
     fs/root/bin/pstree      \
     fs/root/bin/memdiag     \
     fs/root/bin/pktmon      \
-    fs/root/bin/nyprof
+    fs/root/bin/nyprof      \
+    fs/root/bin/nydiag
 
 # ── QEMU Drive & Network Flags (Primary: Boot, Secondary: NyotaFS Data, NIC: E1000) ──
 SMP              ?= 4

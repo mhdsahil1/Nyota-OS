@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     }
 
     if (all) {
-        printf("NyotaOS nyota 1.8.0 x86_64\n");
+        printf("NyotaOS nyota 1.9.0 x86_64\n");
     } else {
         bool first = true;
         if (sysname) {
@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
         }
         if (release) {
             if (!first) printf(" ");
-            printf("1.8.0");
+            printf("1.9.0");
             first = false;
         }
         if (machine) {

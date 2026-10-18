@@ -251,3 +251,18 @@
 - [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.8.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`), and graphics driver to `v1.8.0`
 - [x] Documentation: Created `docs/observability.md` detailing debugging workflows, symbol table unwinding, GDB integration, tracing ABI, and userspace diagnostics tools
 
+## Phase 19: AI-Assisted System Diagnostics (v1.9.0)
+- [x] Diagnostic Service Daemon: `/sbin/diagd` running under PID 1 supervisor (`init`), writing `/run/diagd.pid` and serving telemetry over `/run/diag.sock` (`PING`, `HEALTH`, `METRICS`, `ANALYZE`, `REPORT`)
+- [x] Multi-Resource Telemetry Collection: Integrates physical memory (PMM), kernel heap allocator and canary verification, storage block availability, active scheduler processes/zombies, network interface link/packets, and recent process crash exceptions
+- [x] Dual-Mode Diagnostic Tool (`/bin/nydiag`): Command-line subcommands (`health`, `summary`, `analyze`, `crash`, `redact`, `config`, `report`) and interactive desktop GUI dashboard (`nydiag --gui`)
+- [x] Desktop GUI Assistant: Integrated into desktop environment launcher (`[D] Diagnostics`) with color-coded health badge, metric summary cards (RAM, Disk, Network), observed telemetry panel, root-cause hypotheses, and advisory troubleshooting actions
+- [x] Modular AI Provider Engine: Built-in Local Heuristic Engine (100% offline), External HTTP LLM client (`/api/generate`) with strict connection timeouts and automatic local fallback, and Mock Provider (`--mock memory|crash|network`) for deterministic verification
+- [x] Privacy & Secret Redaction: Automatic scrubbing filter removing Bearer tokens, API keys, passwords, and private key headers from diagnostic output and external transmissions
+- [x] Consent Enforcement: External transmission blocked unless explicit user consent is supplied (`--consent`, `-y`); automatically falls back to local engine without failing
+- [x] Factual Separation: Diagnostic reports strictly separate observed ground truth (`[FACTS]`) from probabilistic reasoning (`[HYPOTHESIS]`) and recommendations (`[RECOMMENDATIONS]`)
+- [x] Non-Execution Safety Guarantee: Advisory recommendations are never automatically executed; all remediation requires manual verification
+- [x] Automated Test Suite: `tools/test_phase19.py` validating 14 test points across system version metadata, binary presence, health checks, metrics summaries, local reasoning, factual distinction, secret redaction, consent gating, simulated crash reasoning, offline fallback, report file export, configuration queries, and host kernel stability
+- [x] System Version Bump: Updated system metadata, kernel headers (`NYOTA_OS_VERSION "1.9.0"`), userland utilities (`uname`, `init`, `sysinfo`, `sysmon`, `about`, `desktop`, `term`, `settings`), and graphics driver to `v1.9.0`
+- [x] Documentation: Created `docs/diagnostics.md` detailing architecture, telemetry pipeline, modular AI providers, privacy redaction, GUI dashboard, and CLI command reference
+
+

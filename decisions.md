@@ -407,3 +407,25 @@ All five primary regression test suites pass 100% on the final integration build
   - `/bin/smp`: Real-time multicore diagnostics and per-core process placement display.
   - `/bin/smpstress`: Multicore stress utility spawning workers pinned to distinct cores executing 1,000,000 shared memory operations with zero failures.
 
+---
+
+# Phase 19 AI-Assisted System Diagnostics Architecture
+
+- **Kernel Entry BSS Zeroing (`kernel/kernel_entry.asm`)**:
+  - *Context*: Flattened binary images created via `objcopy -O binary build/kernel.elf build/kernel.bin` do not record BSS section contents on disk. If the bootloader or physical RAM contains unzeroed memory, global and static uninitialized variables (such as `process_table_storage` and `trace_global_target_pid`) can boot with dirty non-zero state.
+  - *Decision*: Added 64-bit BSS zeroing in `kernel_entry.asm` immediately after entering 64-bit long mode (`mov rdi, _bss_start; mov rcx, _bss_end; sub rcx, rdi; xor rax, rax; rep stosb`) before invoking `kernel_main`.
+- **Non-Blocking TCP Connection Polling (`kernel/net/socket.c`)**:
+  - *Context*: `socket_wait()` puts the calling process to sleep until explicitly woken by an incoming packet via `socket_wake()`. If an external endpoint is offline and sends neither SYN-ACK nor RST, the process remained blocked in `socket_wait()` indefinitely because the timeout check was never reached.
+  - *Decision*: In `socket_connect()`, replaced `socket_wait()` with an interrupt-enabled poll loop (`e1000_poll_rx(); __asm__ volatile ("sti; hlt");`) bounded by a 500ms timeout (`timer_uptime_ms() - start_ms > 500`). When timed out, `sock->state` transitions to `TCP_STATE_CLOSED` and cleanly returns `-1`.
+- **Shell Argument Tokenizer Quote Parsing (`user/sh/main.c`)**:
+  - *Context*: The shell split input strictly on spaces and tabs, breaking multi-word string arguments (e.g. `nydiag redact "auth=bearer sk-... password=..."`).
+  - *Decision*: Enhanced `tokenize()` in `user/sh/main.c` to parse `'` and `"` quote boundaries, stripping the outer quotes and bundling enclosed whitespace into a single token argument.
+- **Privacy Redaction Filter (`user/diagd/diag_engine.h`)**:
+  - *Design*: All telemetry data destined for display or external transmission passes through `redact_sensitive_data()`. Tokens matching `bearer sk-...`, `api_key=...`, `password=...`, `passwd=...`, `secret=...`, and PEM private key blocks are replaced with `[REDACTED_SECRET]`.
+- **Tripartite Factual Separation & Non-Execution Principle**:
+  - *Design*: All diagnostics outputs are strictly partitioned into `[FACTS]` (verified kernel telemetry), `[HYPOTHESIS]` (probabilistic root-cause analysis), and `[RECOMMENDATIONS]` (advisory troubleshooting suggestions).
+  - *Non-Execution Safety*: Suggested commands (e.g. `/bin/memdiag`, `/bin/pstree`) are purely advisory and never executed automatically by the AI system.
+- **Consent-Gated Provider Architecture (`/etc/diagnostics.conf`)**:
+  - *Design*: External AI providers (`AI_PROVIDER_HTTP`) are strictly prohibited from transmitting data over the network without explicit user consent (`--consent`, `-y`). When consent is omitted, or if the external endpoint is unreachable/timed out, the engine automatically falls back to the deterministic **Local Heuristic Engine** without error or disruption to OS operations.
+
+

@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
         gui_fill_rect(win, 12, 12, SYSMON_WIDTH - 24, 76, COLOR_WIDGET_BG);
         gui_draw_rect(win, 12, 12, SYSMON_WIDTH - 24, 76, COLOR_WIDGET_BORDER);
 
-        gui_draw_text(win, 24, 20, "Nyota OS v1.8.0 (x86_64 Developer Tools & Observability)", COLOR_TITLE_ACTIVE, 0);
+        gui_draw_text(win, 24, 20, "Nyota OS v1.9.0 (x86_64 AI Diagnostics & Observability)", COLOR_TITLE_ACTIVE, 0);
 
         uint64_t up_s = si.uptime_sec;
         uint32_t up_h = (uint32_t)(up_s / 3600);

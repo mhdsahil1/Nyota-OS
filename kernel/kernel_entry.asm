@@ -19,6 +19,15 @@ kernel_entry:
     ; 2. Clear Direction Flag (DF) as required by System V AMD64 ABI
     cld
 
+    ; Zero BSS section
+    extern _bss_start
+    extern _bss_end
+    mov  rdi, _bss_start
+    mov  rcx, _bss_end
+    sub  rcx, rdi
+    xor  al, al
+    rep stosb
+
     ; 3. Clear/zero general-purpose registers
     xor  rax, rax
     xor  rbx, rbx
